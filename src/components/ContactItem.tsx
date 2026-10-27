@@ -9,24 +9,38 @@ interface Props {
 
 const ContactItem: React.FC<Props> = ({ contact, onEdit, onDelete }) => {
   return (
-    <li className="flex items-center justify-between p-3 border rounded bg-gray-50">
+    <li className="flex items-center justify-between p-3.5 border border-slate-800 rounded-xl bg-slate-900/90 hover:border-slate-700 transition">
       <div className="flex flex-col">
-        <span className="font-medium">{contact.name}</span>
-        <span className="text-sm text-gray-600">{contact.phone}</span>
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-slate-100 text-sm">{contact.name}</span>
+          {contact.confirmed && (
+            <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-medium">
+              Verified
+            </span>
+          )}
+        </div>
+        <span className="text-xs font-mono text-teal-400 mt-0.5">{contact.phone}</span>
         {contact.relationship && (
-          <span className="text-xs text-gray-500">{contact.relationship}</span>
+          <span className="text-[11px] text-slate-400 mt-0.5">{contact.relationship}</span>
         )}
       </div>
-      <div className="flex space-x-2">
+      <div className="flex items-center gap-2">
+        <a
+          href={`tel:${contact.phone}`}
+          className="px-2.5 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-teal-300 rounded-lg border border-slate-700 transition"
+          title="Call contact"
+        >
+          📞 Call
+        </a>
         <button
           onClick={onEdit}
-          className="px-2 py-1 text-sm bg-primary text-white rounded hover:bg-primary/80"
+          className="px-2.5 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition"
         >
           Edit
         </button>
         <button
           onClick={onDelete}
-          className="px-2 py-1 text-sm bg-red-600 text-white rounded hover:bg-red-700"
+          className="px-2.5 py-1.5 text-xs bg-red-950/40 hover:bg-red-900/60 text-red-300 rounded-lg border border-red-800/40 transition"
         >
           Delete
         </button>

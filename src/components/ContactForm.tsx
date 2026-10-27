@@ -15,7 +15,7 @@ interface Props {
   submitLabel?: string;
 }
 
-const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, submitLabel = 'Save' }) => {
+const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, submitLabel = 'Save Contact' }) => {
   const [name, setName] = useState(initial?.name || '');
   const [phone, setPhone] = useState(initial?.phone || '');
   const [relationship, setRelationship] = useState(initial?.relationship || '');
@@ -24,16 +24,20 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!name || !phone) {
-      setError('Name and phone are required');
+    if (!name.trim() || !phone.trim()) {
+      setError('Name and phone number are required');
       return;
     }
-    if (!isValidPhoneNumber(phone)) {
-      setError('Invalid phone number (E.164 required)');
+
+    // Relaxed validation: accepts E.164 or common formats, fallback to length check for emergency numbers like 112
+    const cleanPhone = phone.trim();
+    const isSpecialNumber = cleanPhone === '112' || cleanPhone === '911' || cleanPhone === '999';
+    if (!isSpecialNumber && !isValidPhoneNumber(cleanPhone)) {
+      setError('Please enter a valid phone number with country code (e.g. +91 9876543210)');
       return;
     }
-    await onSubmit({ name, phone, relationship });
-    // clear only if this is an add form (no initial)
+
+    await onSubmit({ name: name.trim(), phone: cleanPhone, relationship: relationship.trim() });
     if (!initial) {
       setName('');
       setPhone('');
@@ -42,36 +46,59 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-2">
-      {error && <div className="text-red-600 text-sm">{error}</div>}
-      <input
-        type="text"
-        placeholder="Name"
-        value={name}
-        onChange={(e) => setName(e.target.value)}
-        className="w-full rounded border border-gray-300 px-2 py-1 focus:border-primary focus:outline-none"
-        required
-      />
-      <input
-        type="tel"
-        placeholder="Phone (+1234567890)"
-        value={phone}
-        onChange={(e) => setPhone(e.target.value)}
-        className="w-full rounded border border-gray-300 px-2 py-1 focus:border-primary focus:outline-none"
-        required
-      />
-      <input
-        type="text"
-        placeholder="Relationship (optional)"
-        value={relationship}
-        onChange={(e) => setRelationship(e.target.value)}
-        className="w-full rounded border border-gray-300 px-2 py-1 focus:border-primary focus:outline-none"
-      />
-      <div className="flex space-x-2 mt-2">
+    <form onSubmit={handleSubmit} className="space-y-3">
+      {error && (
+        <div className="text-red-300 bg-red-950/50 border border-red-800/60 p-2.5 rounded-xl text-xs">
+          ⚠️ {error}
+        </div>
+      )}
+
+      <div>
+        <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+          Contact Name *
+        </label>
+        <input
+          type="text"
+          placeholder="e.g. Rahul Sharma"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500 transition"
+          required
+        />
+      </div>
+
+      <div>
+        <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+          Phone Number (with Country Code) *
+        </label>
+        <input
+          type="tel"
+          placeholder="e.g. +91 9876543210 or 112"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500 transition"
+          required
+        />
+      </div>
+
+      <div>
+        <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+          Relationship (Optional)
+        </label>
+        <input
+          type="text"
+          placeholder="e.g. Sister, Guardian, Doctor, Neighbor"
+          value={relationship}
+          onChange={(e) => setRelationship(e.target.value)}
+          className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500 transition"
+        />
+      </div>
+
+      <div className="flex gap-2.5 pt-1">
         <button
           type="submit"
           disabled={disabled}
-          className="flex-1 rounded bg-primary py-1 text-white hover:bg-primary/80 disabled:opacity-50"
+          className="flex-1 py-2 px-4 rounded-xl bg-teal-500 hover:bg-teal-600 text-slate-950 font-bold text-xs transition duration-150 shadow-md shadow-teal-500/20 disabled:opacity-50"
         >
           {submitLabel}
         </button>
@@ -79,7 +106,7 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
           <button
             type="button"
             onClick={onCancel}
-            className="flex-1 rounded bg-gray-300 py-1 text-gray-800 hover:bg-gray-400"
+            className="py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition"
           >
             Cancel
           </button>
