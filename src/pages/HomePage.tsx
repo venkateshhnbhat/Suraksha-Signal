@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { collection, query, orderBy, getDocs, addDoc } from 'firebase/firestore';
+import React, { useEffect, useState, useRef } from 'react';
+import { collection, doc, query, orderBy, getDocs, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db, auth, functions, isFirebaseConfigured } from '@/firebase';
 import { httpsCallable } from 'firebase/functions';
 import SOSButton from '@/components/SOSButton';
 import { useNavigate } from 'react-router-dom';
-import type { AppUser } from '@/App';
-import type { Contact } from '@/pages/ContactsPage';
+import type { AppUser, Contact, ActiveAlert } from '@/types';
+import { DEFAULT_DEMO_CONTACTS } from '@/constants';
 import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
 import L from 'leaflet';
 
@@ -22,36 +22,21 @@ interface Props {
   onLogout: () => void;
 }
 
-const DEFAULT_DEMO_CONTACTS: Contact[] = [
-  {
-    id: 'c1',
-    name: 'National Emergency Service',
-    phone: '+91112',
-    relationship: 'Emergency Authority',
-    confirmed: true,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'c2',
-    name: 'Family Contact (Priya)',
-    phone: '+919876543211',
-    relationship: 'Sister',
-    confirmed: true,
-    createdAt: new Date().toISOString()
-  }
-];
-
 const HomePage: React.FC<Props> = ({ user, onLogout }) => {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
   const [geoError, setGeoError] = useState<string | null>(null);
-  const [activeAlert, setActiveAlert] = useState<{ id: string; time: string } | null>(null);
+  const [activeAlert, setActiveAlert] = useState<ActiveAlert | null>(null);
+  const [showNoContactsModal, setShowNoContactsModal] = useState(false);
   const [sirenPlaying, setSirenPlaying] = useState(false);
-  const audioContextRef = React.useRef<AudioContext | null>(null);
-  const oscillatorRef = React.useRef<OscillatorNode | null>(null);
 
-  // Load contacts (from Firestore or LocalStorage for demo)
+  // Siren AudioContext and Oscillators refs
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const carrierOscRef = useRef<OscillatorNode | null>(null);
+  const lfoOscRef = useRef<OscillatorNode | null>(null);
+
+  // Load contacts (Firestore for real users; LocalStorage for demo)
   useEffect(() => {
     const loadContacts = async () => {
       if (user.isDemo || !isFirebaseConfigured() || !auth.currentUser) {
@@ -76,10 +61,11 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
             const data = docSnap.data() as Omit<Contact, 'id'>;
             list.push({ id: docSnap.id, ...data });
           });
-          setContacts(list.length > 0 ? list : DEFAULT_DEMO_CONTACTS);
+          // Real users get their actual contacts, NO fallback to demo contacts!
+          setContacts(list);
         } catch (err) {
-          console.warn('Firestore fetch failed, using local contacts fallback:', err);
-          setContacts(DEFAULT_DEMO_CONTACTS);
+          console.warn('Firestore fetch failed:', err);
+          setContacts([]);
         }
       }
     };
@@ -91,7 +77,6 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
   useEffect(() => {
     if (!('geolocation' in navigator)) {
       setGeoError('Geolocation not supported by this browser');
-      // Set default demo location (Bengaluru)
       setCoords({ lat: 12.9716, lng: 77.5946, accuracy: 25 });
       return;
     }
@@ -108,7 +93,6 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
       (err) => {
         console.warn('Geolocation watch error:', err.message);
         setGeoError(err.message);
-        // Default to Bangalore coordinates for testing
         setCoords((prev) => prev || { lat: 12.9716, lng: 77.5946, accuracy: 50 });
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
@@ -117,36 +101,88 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
     return () => navigator.geolocation.clearWatch(watchId);
   }, []);
 
-  // Web Audio emergency siren
+  // Live Location stream: Update alert document in Firestore every ~10s while alert is active
+  useEffect(() => {
+    if (!activeAlert || activeAlert.status === 'failed' || activeAlert.isDemo || !coords) {
+      return;
+    }
+
+    const intervalId = setInterval(async () => {
+      try {
+        const alertDocRef = doc(db, 'alerts', activeAlert.id);
+        await updateDoc(alertDocRef, {
+          latitude: coords.lat,
+          longitude: coords.lng,
+          updatedAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn('Live location update warning:', e);
+      }
+    }, 10000);
+
+    return () => clearInterval(intervalId);
+  }, [activeAlert, coords]);
+
+  // Cleanup siren audio nodes and context
+  const stopSiren = () => {
+    try {
+      if (carrierOscRef.current) {
+        carrierOscRef.current.stop();
+        carrierOscRef.current.disconnect();
+        carrierOscRef.current = null;
+      }
+      if (lfoOscRef.current) {
+        lfoOscRef.current.stop();
+        lfoOscRef.current.disconnect();
+        lfoOscRef.current = null;
+      }
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+    } catch (e) {
+      console.warn('Error stopping siren audio:', e);
+    }
+    setSirenPlaying(false);
+  };
+
+  // Web Audio emergency siren with looping LFO
   const toggleSiren = () => {
     if (sirenPlaying) {
-      if (oscillatorRef.current) {
-        oscillatorRef.current.stop();
-        oscillatorRef.current.disconnect();
-      }
-      setSirenPlaying(false);
+      stopSiren();
     } else {
       try {
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AudioContextClass();
         audioContextRef.current = ctx;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
 
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(800, ctx.currentTime);
-        // Siren warble
-        let time = ctx.currentTime;
-        for (let i = 0; i < 20; i++) {
-          osc.frequency.exponentialRampToValueAtTime(1400, time + 0.3);
-          osc.frequency.exponentialRampToValueAtTime(800, time + 0.6);
-          time += 0.6;
-        }
+        // Carrier oscillator (primary tone ~900Hz)
+        const carrier = ctx.createOscillator();
+        carrier.type = 'sawtooth';
+        carrier.frequency.setValueAtTime(900, ctx.currentTime);
 
-        gain.gain.setValueAtTime(0.2, ctx.currentTime);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        oscillatorRef.current = osc;
+        // LFO oscillator (~1.5Hz pitch modulator for classic police/emergency wail)
+        const lfo = ctx.createOscillator();
+        lfo.type = 'sine';
+        lfo.frequency.setValueAtTime(1.5, ctx.currentTime);
+
+        // LFO depth
+        const lfoGain = ctx.createGain();
+        lfoGain.gain.setValueAtTime(450, ctx.currentTime);
+        lfo.connect(lfoGain);
+        lfoGain.connect(carrier.frequency);
+
+        // Master volume
+        const masterGain = ctx.createGain();
+        masterGain.gain.setValueAtTime(0.2, ctx.currentTime);
+        carrier.connect(masterGain);
+        masterGain.connect(ctx.destination);
+
+        carrier.start();
+        lfo.start();
+
+        carrierOscRef.current = carrier;
+        lfoOscRef.current = lfo;
         setSirenPlaying(true);
       } catch (e) {
         console.warn('Audio siren error:', e);
@@ -154,35 +190,106 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
     }
   };
 
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      stopSiren();
+    };
+  }, []);
+
   // SOS activation handler
   const handleSOS = async () => {
-    const contactPhones = contacts.map((c) => `${c.name} (${c.phone})`);
+    // Check confirmed contacts for real users
+    const confirmedList = contacts.filter((c) => c.confirmed);
+
+    if (!user.isDemo && confirmedList.length === 0) {
+      setShowNoContactsModal(true);
+      return;
+    }
+
     const alertId = 'ALERT_' + Date.now().toString(36).toUpperCase();
     const timeStr = new Date().toLocaleTimeString();
 
-    setActiveAlert({ id: alertId, time: timeStr });
+    // Set initial sending state
+    setActiveAlert({
+      id: alertId,
+      time: timeStr,
+      status: 'sending',
+      isDemo: user.isDemo
+    });
 
-    // If connected to real Firebase, push to collection
-    if (!user.isDemo && isFirebaseConfigured() && auth.currentUser) {
-      try {
-        const alertsRef = collection(db, 'alerts');
-        await addDoc(alertsRef, {
-          ownerUid: auth.currentUser.uid,
-          createdAt: new Date(),
-          contacts: contacts.map((c) => c.phone),
-          status: 'active',
-          latitude: coords?.lat || null,
-          longitude: coords?.lng || null
+    if (user.isDemo || !isFirebaseConfigured() || !auth.currentUser) {
+      // Simulate realistic demo send
+      setTimeout(() => {
+        setActiveAlert({
+          id: alertId,
+          time: timeStr,
+          status: 'sent',
+          sentCount: contacts.length,
+          totalCount: contacts.length,
+          isDemo: true
         });
-        const triggerSOS = httpsCallable(functions, 'triggerSOS');
-        await triggerSOS({ sessionId: alertId, contacts: contacts.map((c) => c.phone) });
-      } catch (err) {
-        console.warn('Backend SOS broadcast warning:', err);
-      }
+      }, 700);
+      return;
+    }
+
+    try {
+      // 1. Create alert document in Firestore with owner and initial coordinates
+      const alertDocRef = doc(db, 'alerts', alertId);
+      await setDoc(alertDocRef, {
+        ownerUid: auth.currentUser.uid,
+        status: 'active',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        latitude: coords?.lat || null,
+        longitude: coords?.lng || null
+      });
+
+      // 2. Invoke triggerSOS Cloud Function
+      const triggerSOSFn = httpsCallable<{ sessionId: string }, { sent: number; failed: number; total: number }>(
+        functions,
+        'triggerSOS'
+      );
+      const res = await triggerSOSFn({ sessionId: alertId });
+
+      const { sent, total } = res.data;
+      setActiveAlert({
+        id: alertId,
+        time: timeStr,
+        status: 'sent',
+        sentCount: sent,
+        totalCount: total,
+        isDemo: false
+      });
+    } catch (err: any) {
+      console.error('Backend SOS broadcast failed:', err);
+      setActiveAlert({
+        id: alertId,
+        time: timeStr,
+        status: 'failed',
+        error: err.message || 'Network error while broadcasting distress signal.',
+        isDemo: false
+      });
     }
   };
 
+  const handleDismissAlert = async () => {
+    if (activeAlert && !activeAlert.isDemo && isFirebaseConfigured() && auth.currentUser) {
+      try {
+        const alertDocRef = doc(db, 'alerts', activeAlert.id);
+        await updateDoc(alertDocRef, {
+          status: 'dismissed',
+          updatedAt: serverTimestamp()
+        });
+      } catch (e) {
+        console.warn('Error dismissing alert in firestore:', e);
+      }
+    }
+    setActiveAlert(null);
+  };
+
   const centerPos: [number, number] = coords ? [coords.lat, coords.lng] : [12.9716, 77.5946];
+  const confirmedCount = contacts.filter((c) => c.confirmed).length;
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -198,6 +305,11 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
               <div className="flex items-center gap-1.5 text-[11px] text-teal-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
                 <span>Monitoring Active</span>
+                {user.isDemo && (
+                  <span className="ml-1 text-[10px] px-1.5 py-0.2 bg-teal-500/20 text-teal-300 rounded font-mono">
+                    DEMO MODE
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -207,7 +319,7 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
               onClick={() => navigate('/contacts')}
               className="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
             >
-              👥 Contacts ({contacts.length})
+              👥 Contacts ({confirmedCount} active)
             </button>
             <button
               onClick={onLogout}
@@ -221,29 +333,83 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
 
       {/* Main Container */}
       <main className="flex-1 max-w-4xl w-full mx-auto p-4 space-y-6">
-        {/* Active Emergency Alert Banner */}
+        {/* Active Emergency Alert Banner with Real States */}
         {activeAlert && (
-          <div className="p-4 rounded-2xl bg-gradient-to-r from-red-950 to-rose-950 border border-red-600/80 shadow-lg shadow-red-900/30 animate-pulse">
-            <div className="flex items-start justify-between">
-              <div className="flex items-center gap-3">
-                <span className="text-3xl">⚠️</span>
+          <div
+            className={`p-4 rounded-2xl border shadow-lg transition-all ${
+              activeAlert.status === 'sending'
+                ? 'bg-amber-950/70 border-amber-500/80 shadow-amber-900/20'
+                : activeAlert.status === 'failed'
+                ? 'bg-rose-950 border-rose-600 shadow-rose-950/50'
+                : 'bg-gradient-to-r from-red-950 to-rose-950 border-red-600/80 shadow-red-900/30'
+            }`}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <span className="text-3xl mt-0.5">
+                  {activeAlert.status === 'sending' ? '⏳' : activeAlert.status === 'failed' ? '❌' : '🚨'}
+                </span>
                 <div>
-                  <h3 className="font-bold text-red-100 text-base">
-                    DISTRESS SIGNAL BROADCAST ACTIVE
-                  </h3>
-                  <p className="text-xs text-red-200 mt-0.5">
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-white text-base">
+                      {activeAlert.status === 'sending'
+                        ? 'BROADCASTING EMERGENCY DISTRESS SIGNAL…'
+                        : activeAlert.status === 'failed'
+                        ? 'SOS DISPATCH FAILED'
+                        : 'DISTRESS SIGNAL BROADCAST ACTIVE'}
+                    </h3>
+                    {activeAlert.isDemo && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 bg-amber-500/30 text-amber-300 rounded border border-amber-500/40 uppercase">
+                        DEMO: no real messages were sent
+                      </span>
+                    )}
+                  </div>
+
+                  <p className="text-xs text-slate-300 mt-1 font-mono">
                     Triggered at {activeAlert.time} • Alert ID: {activeAlert.id}
                   </p>
-                  <p className="text-xs text-red-300 mt-1 font-mono">
-                    Notified {contacts.length} emergency contacts with live GPS coordinates.
-                  </p>
+
+                  {activeAlert.status === 'sending' && (
+                    <p className="text-xs text-amber-300 mt-1">
+                      Dispatching encrypted location and panic signals to your emergency contacts…
+                    </p>
+                  )}
+
+                  {activeAlert.status === 'sent' && (
+                    <p className="text-xs text-emerald-300 mt-1 font-medium">
+                      ✓ Successfully sent distress SMS to {activeAlert.sentCount} of {activeAlert.totalCount} confirmed contacts.
+                    </p>
+                  )}
+
+                  {activeAlert.status === 'failed' && (
+                    <div className="mt-2 space-y-2">
+                      <p className="text-xs text-rose-200 bg-rose-900/40 p-2 rounded-lg border border-rose-800">
+                        {activeAlert.error || 'Could not deliver SMS dispatch to emergency contacts.'}
+                      </p>
+                      <div className="flex items-center gap-2 pt-1">
+                        <button
+                          onClick={handleSOS}
+                          className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-sm"
+                        >
+                          🔄 Retry SOS Dispatch
+                        </button>
+                        <a
+                          href="tel:112"
+                          className="px-3.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold transition shadow-md shadow-red-600/30 flex items-center gap-1.5"
+                        >
+                          <span>📞 Call 112 Immediately</span>
+                        </a>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
+
               <button
-                onClick={() => setActiveAlert(null)}
-                className="px-3 py-1 rounded-lg bg-red-800/80 hover:bg-red-700 text-white text-xs font-semibold"
+                onClick={handleDismissAlert}
+                className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold border border-slate-700"
               >
-                Dismiss Alert
+                Dismiss
               </button>
             </div>
           </div>
@@ -347,7 +513,7 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                  <span>🛡️ Emergency Contacts ({contacts.length}/5)</span>
+                  <span>🛡️ Emergency Contacts ({confirmedCount} active)</span>
                 </h3>
                 <button
                   onClick={() => navigate('/contacts')}
@@ -357,22 +523,42 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
                 </button>
               </div>
 
-              <div className="space-y-2 mt-2">
-                {contacts.slice(0, 3).map((c) => (
-                  <div
-                    key={c.id}
-                    className="p-2.5 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between text-xs"
-                  >
-                    <div>
-                      <p className="font-semibold text-slate-200">{c.name}</p>
-                      <p className="text-slate-400 font-mono text-[11px]">{c.phone}</p>
+              {contacts.length === 0 ? (
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 text-center text-xs text-slate-400">
+                  <p>No emergency contacts added yet.</p>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Add trusted friends or family so they receive distress alerts.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 mt-2">
+                  {contacts.slice(0, 3).map((c) => (
+                    <div
+                      key={c.id}
+                      className="p-2.5 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between text-xs"
+                    >
+                      <div>
+                        <div className="flex items-center gap-1.5">
+                          <p className="font-semibold text-slate-200">{c.name}</p>
+                          {c.confirmed ? (
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 font-medium">
+                              Verified
+                            </span>
+                          ) : (
+                            <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-medium">
+                              Pending
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-slate-400 font-mono text-[11px]">{c.phone}</p>
+                      </div>
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">
+                        {c.relationship || 'Emergency'}
+                      </span>
                     </div>
-                    <span className="text-[10px] px-2 py-0.5 rounded bg-slate-800 text-slate-300">
-                      {c.relationship || 'Emergency'}
-                    </span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <button
@@ -384,6 +570,38 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
           </div>
         </div>
       </main>
+
+      {/* Zero Confirmed Contacts Blocking Modal */}
+      {showNoContactsModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-red-500/50 rounded-3xl p-6 shadow-2xl text-center">
+            <div className="w-16 h-16 rounded-2xl bg-red-500/20 text-red-400 flex items-center justify-center mx-auto mb-4 text-3xl">
+              ⚠️
+            </div>
+            <h3 className="text-xl font-bold text-white mb-2">No Confirmed Contacts</h3>
+            <p className="text-xs text-slate-300 mb-6 leading-relaxed">
+              SOS cannot be triggered because you do not have any confirmed emergency contacts. Please add at least one trusted contact who has confirmed via SMS before broadcasting distress alerts.
+            </p>
+            <div className="space-y-2.5">
+              <button
+                onClick={() => {
+                  setShowNoContactsModal(false);
+                  navigate('/contacts');
+                }}
+                className="w-full py-2.5 px-4 bg-teal-500 hover:bg-teal-600 text-slate-950 font-bold rounded-xl text-xs transition shadow-md shadow-teal-500/20"
+              >
+                Go to Emergency Contacts →
+              </button>
+              <button
+                onClick={() => setShowNoContactsModal(false)}
+                className="w-full py-2 px-4 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-xl text-xs border border-slate-700 transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

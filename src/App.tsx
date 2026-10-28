@@ -5,15 +5,11 @@ import { auth, isFirebaseConfigured } from '@/firebase';
 import AuthPage from '@/pages/AuthPage';
 import HomePage from '@/pages/HomePage';
 import ContactsPage from '@/pages/ContactsPage';
+import TrackPage from '@/pages/TrackPage';
 import ErrorBoundary from '@/components/ErrorBoundary';
+import type { AppUser } from '@/types';
 
-export interface AppUser {
-  uid: string;
-  displayName: string | null;
-  email: string | null;
-  phoneNumber: string | null;
-  isDemo?: boolean;
-}
+export type { AppUser };
 
 const App: React.FC = () => {
   const [user, setUser] = useState<AppUser | null>(() => {
@@ -30,7 +26,7 @@ const App: React.FC = () => {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    let timer: NodeJS.Timeout;
+    let timer: ReturnType<typeof setTimeout>;
 
     // Safety timeout: never get stuck on loading screen
     timer = setTimeout(() => {
@@ -131,6 +127,10 @@ const App: React.FC = () => {
                 <Navigate to="/auth" replace />
               )
             }
+          />
+          <Route
+            path="/track/:alertId"
+            element={<TrackPage />}
           />
           <Route
             path="/"

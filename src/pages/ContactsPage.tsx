@@ -5,35 +5,8 @@ import { httpsCallable } from 'firebase/functions';
 import ContactForm from '@/components/ContactForm';
 import ContactItem from '@/components/ContactItem';
 import { useNavigate } from 'react-router-dom';
-import type { AppUser } from '@/App';
-
-export interface Contact {
-  id: string;
-  name: string;
-  phone: string;
-  relationship: string;
-  confirmed: boolean;
-  createdAt: any;
-}
-
-const DEFAULT_DEMO_CONTACTS: Contact[] = [
-  {
-    id: 'c1',
-    name: 'National Emergency Service',
-    phone: '+91112',
-    relationship: 'Emergency Authority',
-    confirmed: true,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 'c2',
-    name: 'Family Contact (Priya)',
-    phone: '+919876543211',
-    relationship: 'Sister',
-    confirmed: true,
-    createdAt: new Date().toISOString()
-  }
-];
+import type { AppUser, Contact } from '@/types';
+import { DEFAULT_DEMO_CONTACTS } from '@/constants';
 
 interface Props {
   user?: AppUser;
@@ -71,6 +44,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
           const data = docSnap.data() as Omit<Contact, 'id'>;
           list.push({ id: docSnap.id, ...data });
         });
+        // Real user gets their actual contacts (no default demo contacts fallback)
         setContacts(list);
       } catch (err: any) {
         console.warn('Firestore fetch failed:', err);
@@ -117,12 +91,12 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
       });
       try {
         const sendConsent = httpsCallable(functions, 'sendContactConsent');
-        await sendConsent({ contactId: docRef.id, uid: auth.currentUser.uid });
+        await sendConsent({ contactId: docRef.id });
       } catch (e) {
         console.warn('Callable function sendContactConsent warning:', e);
       }
       fetchContacts();
-      setSuccessMsg(`✓ Added ${contact.name} to emergency list.`);
+      setSuccessMsg(`✓ Added ${contact.name}. A confirmation SMS has been requested.`);
     } catch (e: any) {
       setError(e.message);
     }
@@ -232,7 +206,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
           </h3>
           {contacts.length === 0 ? (
             <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-slate-800/60 text-slate-500 text-xs">
-              No emergency contacts added yet. Add at least one trusted friend, family member, or authority.
+              No emergency contacts added yet. Add at least one trusted contact who has confirmed via SMS.
             </div>
           ) : (
             <ul className="space-y-2.5">
@@ -250,12 +224,21 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
 
         {/* Edit Modal */}
         {editingContact && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl shadow-2xl w-full max-w-md">
+          <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+            <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
               <h3 className="text-base font-bold text-white mb-4">Edit Emergency Contact</h3>
               <ContactForm
-                initial={editingContact}
-                onSubmit={(data) => handleUpdate({ ...editingContact, ...data })}
+                initial={{
+                  name: editingContact.name,
+                  phone: editingContact.phone,
+                  relationship: editingContact.relationship
+                }}
+                onSubmit={async (data) => {
+                  await handleUpdate({
+                    ...editingContact,
+                    ...data
+                  });
+                }}
                 onCancel={() => setEditingContact(null)}
                 submitLabel="Save Changes"
               />

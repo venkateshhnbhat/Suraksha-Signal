@@ -1,5 +1,5 @@
 import React from 'react';
-import type { Contact } from '@/pages/ContactsPage';
+import type { Contact } from '@/types';
 
 interface Props {
   contact: Contact;
@@ -13,9 +13,13 @@ const ContactItem: React.FC<Props> = ({ contact, onEdit, onDelete }) => {
       <div className="flex flex-col">
         <div className="flex items-center gap-2">
           <span className="font-semibold text-slate-100 text-sm">{contact.name}</span>
-          {contact.confirmed && (
+          {contact.confirmed ? (
             <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-medium">
               Verified
+            </span>
+          ) : (
+            <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-medium">
+              Pending confirmation
             </span>
           )}
         </div>
