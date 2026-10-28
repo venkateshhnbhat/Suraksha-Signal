@@ -31,10 +31,8 @@ const App: React.FC = () => {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-
     // Safety timeout: never get stuck on loading screen
-    timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       setChecking(false);
     }, 1500);
 

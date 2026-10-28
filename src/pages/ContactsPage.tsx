@@ -60,7 +60,6 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
 
   useEffect(() => {
     fetchContacts();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleAdd = async (contact: Omit<Contact, 'id' | 'createdAt' | 'confirmed'>) => {
@@ -68,7 +67,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
     setSuccessMsg(null);
 
     if (contacts.length >= 5) {
-      setError('You can add up to 5 emergency contacts.');
+      setError(t('contacts.limitError'));
       return;
     }
 
@@ -83,7 +82,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
       setContacts(updated);
       localStorage.setItem('suraksha_contacts', JSON.stringify(updated));
       localStorage.setItem('safesignal_contacts', JSON.stringify(updated));
-      setSuccessMsg(`✓ Added ${contact.name} to emergency list.`);
+      setSuccessMsg(t('contacts.addedSuccess', { name: contact.name }));
       return;
     }
 
@@ -102,7 +101,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
         console.warn('Callable function sendContactConsent warning:', e);
       }
       fetchContacts();
-      setSuccessMsg(`✓ Added ${contact.name}. A confirmation SMS has been requested.`);
+      setSuccessMsg(t('contacts.addedSuccess', { name: contact.name }));
     } catch (e: any) {
       setError(e.message);
     }
@@ -116,7 +115,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
       localStorage.setItem('suraksha_contacts', JSON.stringify(updated));
       localStorage.setItem('safesignal_contacts', JSON.stringify(updated));
       setEditingContact(null);
-      setSuccessMsg(`✓ Updated ${contact.name}.`);
+      setSuccessMsg(t('contacts.updatedSuccess', { name: contact.name }));
       return;
     }
 
@@ -130,7 +129,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
       });
       setEditingContact(null);
       fetchContacts();
-      setSuccessMsg(`✓ Updated ${contact.name}.`);
+      setSuccessMsg(t('contacts.updatedSuccess', { name: contact.name }));
     } catch (e: any) {
       setError(e.message);
     }
@@ -143,7 +142,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
       setContacts(updated);
       localStorage.setItem('suraksha_contacts', JSON.stringify(updated));
       localStorage.setItem('safesignal_contacts', JSON.stringify(updated));
-      setSuccessMsg('✓ Contact removed.');
+      setSuccessMsg(t('contacts.deletedSuccess'));
       return;
     }
 
@@ -152,7 +151,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
       const docRef = doc(db, 'users', auth.currentUser.uid, 'contacts', id);
       await deleteDoc(docRef);
       fetchContacts();
-      setSuccessMsg('✓ Contact removed.');
+      setSuccessMsg(t('contacts.deletedSuccess'));
     } catch (e: any) {
       setError(e.message);
     }
@@ -180,9 +179,9 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
 
       <main className="flex-1 max-w-2xl w-full mx-auto p-4 space-y-6">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-white">Emergency Contacts</h2>
+          <h2 className="text-2xl font-bold tracking-tight text-white">{t('contacts.title')}</h2>
           <p className="text-xs text-slate-400 mt-1">
-            When SOS is triggered, an SMS with your live GPS location will be broadcast to these trusted contacts.
+            {t('contacts.subtitle')}
           </p>
         </div>
 
@@ -201,23 +200,23 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
         {/* Add Contact Card */}
         <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800">
           <h3 className="text-sm font-semibold text-slate-200 mb-3 flex items-center gap-2">
-            <span>➕ Add Trusted Contact</span>
+            <span>{t('contacts.addNew')}</span>
           </h3>
           <ContactForm
             onSubmit={handleAdd}
             disabled={contacts.length >= 5}
-            submitLabel="Add to Emergency Contacts"
+            submitLabel={t('form.addBtn')}
           />
         </div>
 
         {/* Contacts List */}
         <div>
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
-            Active Contact Directory
+            {t('contacts.directoryTitle')}
           </h3>
           {contacts.length === 0 ? (
             <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-slate-800/60 text-slate-500 text-xs">
-              No emergency contacts added yet. Add at least one trusted contact who has confirmed via SMS.
+              {t('contacts.noContactsPage')}
             </div>
           ) : (
             <ul className="space-y-2.5">
@@ -237,7 +236,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
         {editingContact && (
           <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl">
-              <h3 className="text-base font-bold text-white mb-4">Edit Emergency Contact</h3>
+              <h3 className="text-base font-bold text-white mb-4">{t('contacts.editContact')}</h3>
               <ContactForm
                 initial={{
                   name: editingContact.name,
@@ -251,7 +250,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
                   });
                 }}
                 onCancel={() => setEditingContact(null)}
-                submitLabel="Save Changes"
+                submitLabel={t('form.saveBtn')}
               />
             </div>
           </div>

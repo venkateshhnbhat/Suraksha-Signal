@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { isValidPhoneNumber } from 'libphonenumber-js';
+import { useTranslation } from 'react-i18next';
 
 type ContactInput = {
   name: string;
@@ -15,7 +16,8 @@ interface Props {
   submitLabel?: string;
 }
 
-const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, submitLabel = 'Save Contact' }) => {
+const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, submitLabel }) => {
+  const { t } = useTranslation();
   const [name, setName] = useState(initial?.name || '');
   const [phone, setPhone] = useState(initial?.phone || '');
   const [relationship, setRelationship] = useState(initial?.relationship || '');
@@ -25,7 +27,7 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
     e.preventDefault();
     setError(null);
     if (!name.trim() || !phone.trim()) {
-      setError('Name and phone number are required');
+      setError(t('form.requiredError'));
       return;
     }
 
@@ -33,7 +35,7 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
     const cleanPhone = phone.trim();
     const isSpecialNumber = cleanPhone === '112' || cleanPhone === '911' || cleanPhone === '999';
     if (!isSpecialNumber && !isValidPhoneNumber(cleanPhone)) {
-      setError('Please enter a valid phone number with country code (e.g. +91 9876543210)');
+      setError(t('form.invalidPhone'));
       return;
     }
 
@@ -45,6 +47,8 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
     }
   };
 
+  const finalSubmitLabel = submitLabel || (initial ? t('form.saveBtn') : t('form.addBtn'));
+
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
       {error && (
@@ -55,11 +59,11 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
 
       <div>
         <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-          Contact Name *
+          {t('form.nameLabel')}
         </label>
         <input
           type="text"
-          placeholder="e.g. Rahul Sharma"
+          placeholder={t('form.namePlaceholder')}
           value={name}
           onChange={(e) => setName(e.target.value)}
           className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500 transition"
@@ -69,11 +73,11 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
 
       <div>
         <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-          Phone Number (with Country Code) *
+          {t('form.phoneLabel')}
         </label>
         <input
           type="tel"
-          placeholder="e.g. +91 9876543210 or 112"
+          placeholder={t('form.phonePlaceholder')}
           value={phone}
           onChange={(e) => setPhone(e.target.value)}
           className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500 transition"
@@ -83,11 +87,11 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
 
       <div>
         <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-          Relationship (Optional)
+          {t('form.relLabel')}
         </label>
         <input
           type="text"
-          placeholder="e.g. Sister, Guardian, Doctor, Neighbor"
+          placeholder={t('form.relPlaceholder')}
           value={relationship}
           onChange={(e) => setRelationship(e.target.value)}
           className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-teal-500 transition"
@@ -100,7 +104,7 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
           disabled={disabled}
           className="flex-1 py-2 px-4 rounded-xl bg-teal-500 hover:bg-teal-600 text-slate-950 font-bold text-xs transition duration-150 shadow-md shadow-teal-500/20 disabled:opacity-50"
         >
-          {submitLabel}
+          {finalSubmitLabel}
         </button>
         {onCancel && (
           <button
@@ -108,7 +112,7 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
             onClick={onCancel}
             className="py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold text-xs border border-slate-700 transition"
           >
-            Cancel
+            {t('contacts.cancel')}
           </button>
         )}
       </div>

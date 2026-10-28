@@ -1,4 +1,5 @@
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import type { Contact } from '@/types';
 
 interface Props {
@@ -8,6 +9,8 @@ interface Props {
 }
 
 const ContactItem: React.FC<Props> = ({ contact, onEdit, onDelete }) => {
+  const { t } = useTranslation();
+
   return (
     <li className="flex items-center justify-between p-3.5 border border-slate-800 rounded-xl bg-slate-900/90 hover:border-slate-700 transition">
       <div className="flex flex-col">
@@ -15,11 +18,11 @@ const ContactItem: React.FC<Props> = ({ contact, onEdit, onDelete }) => {
           <span className="font-semibold text-slate-100 text-sm">{contact.name}</span>
           {contact.confirmed ? (
             <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-medium">
-              Verified
+              {t('contacts.verified')}
             </span>
           ) : (
             <span className="text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 px-1.5 py-0.5 rounded font-medium">
-              Pending confirmation
+              {t('contacts.pending')}
             </span>
           )}
         </div>
@@ -32,21 +35,21 @@ const ContactItem: React.FC<Props> = ({ contact, onEdit, onDelete }) => {
         <a
           href={`tel:${contact.phone}`}
           className="px-2.5 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-teal-300 rounded-lg border border-slate-700 transition"
-          title="Call contact"
+          title={t('contacts.call')}
         >
-          📞 Call
+          {t('contacts.call')}
         </a>
         <button
           onClick={onEdit}
           className="px-2.5 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg border border-slate-700 transition"
         >
-          Edit
+          {t('contacts.edit')}
         </button>
         <button
           onClick={onDelete}
           className="px-2.5 py-1.5 text-xs bg-red-950/40 hover:bg-red-900/60 text-red-300 rounded-lg border border-red-800/40 transition"
         >
-          Delete
+          {t('contacts.delete')}
         </button>
       </div>
     </li>
