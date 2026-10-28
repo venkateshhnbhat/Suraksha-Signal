@@ -27,6 +27,11 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // Email OTP records (cloud functions only, completely inaccessible to clients)
+    match /emailOtps/{otpId} {
+      allow read, write: if false;
+    }
+
     // Default deny
     match /{document=**} {
       allow read, write: if false;
