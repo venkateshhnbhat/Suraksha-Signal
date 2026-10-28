@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <defs>
+    <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#14b8a6"/>
+      <stop offset="100%" stop-color="#0f766e"/>
+    </linearGradient>
+    <linearGradient id="beacon" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#b91c1c"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" rx="24" fill="#0f172a"/>
+  <path d="M50 15 L80 28 V52 C80 72 50 87 50 87 C50 87 20 72 20 52 V28 Z" fill="url(#grad)" opacity="0.9"/>
+  <circle cx="50" cy="50" r="16" fill="url(#beacon)"/>
+  <circle cx="50" cy="50" r="8" fill="#ffffff"/>
+</svg>

@@ -20,7 +20,7 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('SafeSignal Uncaught error:', error, errorInfo);
+    console.error('Suraksha Signal Uncaught error:', error, errorInfo);
   }
 
   public render() {
@@ -33,7 +33,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </div>
             <h1 className="text-xl font-bold mb-2">Something went wrong</h1>
             <p className="text-sm text-slate-300 mb-4">
-              SafeSignal encountered an unexpected error while rendering.
+              Suraksha Signal encountered an unexpected error while rendering.
             </p>
             {this.state.error && (
               <pre className="bg-slate-950 p-3 rounded-lg text-xs text-red-300 text-left overflow-x-auto mb-6 max-h-40">

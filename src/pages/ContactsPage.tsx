@@ -4,6 +4,8 @@ import { db, auth, functions, isFirebaseConfigured } from '@/firebase';
 import { httpsCallable } from 'firebase/functions';
 import ContactForm from '@/components/ContactForm';
 import ContactItem from '@/components/ContactItem';
+import LanguageSwitcher from '@/components/LanguageSwitcher';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import type { AppUser, Contact } from '@/types';
 import { DEFAULT_DEMO_CONTACTS } from '@/constants';
@@ -14,6 +16,7 @@ interface Props {
 }
 
 const ContactsPage: React.FC<Props> = ({ user }) => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
@@ -24,14 +27,16 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
 
   const fetchContacts = async () => {
     if (isDemo) {
-      const saved = localStorage.getItem('safesignal_contacts');
+      const saved = localStorage.getItem('suraksha_contacts') || localStorage.getItem('safesignal_contacts');
       if (saved) {
         try {
           setContacts(JSON.parse(saved));
+          localStorage.setItem('suraksha_contacts', saved);
           return;
         } catch {}
       }
       setContacts(DEFAULT_DEMO_CONTACTS);
+      localStorage.setItem('suraksha_contacts', JSON.stringify(DEFAULT_DEMO_CONTACTS));
       localStorage.setItem('safesignal_contacts', JSON.stringify(DEFAULT_DEMO_CONTACTS));
     } else {
       if (!auth.currentUser) return;
@@ -76,6 +81,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
       };
       const updated = [...contacts, newContact];
       setContacts(updated);
+      localStorage.setItem('suraksha_contacts', JSON.stringify(updated));
       localStorage.setItem('safesignal_contacts', JSON.stringify(updated));
       setSuccessMsg(`✓ Added ${contact.name} to emergency list.`);
       return;
@@ -107,6 +113,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
     if (isDemo) {
       const updated = contacts.map((c) => (c.id === contact.id ? contact : c));
       setContacts(updated);
+      localStorage.setItem('suraksha_contacts', JSON.stringify(updated));
       localStorage.setItem('safesignal_contacts', JSON.stringify(updated));
       setEditingContact(null);
       setSuccessMsg(`✓ Updated ${contact.name}.`);
@@ -134,6 +141,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
     if (isDemo) {
       const updated = contacts.filter((c) => c.id !== id);
       setContacts(updated);
+      localStorage.setItem('suraksha_contacts', JSON.stringify(updated));
       localStorage.setItem('safesignal_contacts', JSON.stringify(updated));
       setSuccessMsg('✓ Contact removed.');
       return;
@@ -159,11 +167,14 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
             onClick={() => navigate('/')}
             className="flex items-center gap-1.5 text-xs font-medium text-teal-400 hover:text-teal-300 transition"
           >
-            <span>← Back to SOS Dashboard</span>
+            <span>{t('nav.backHome')}</span>
           </button>
-          <span className="text-xs text-slate-400">
-            {contacts.length}/5 Contacts Registered
-          </span>
+          <div className="flex items-center gap-3">
+            <LanguageSwitcher />
+            <span className="text-xs text-slate-400">
+              {t('contacts.registeredCount', { count: contacts.length })}
+            </span>
+          </div>
         </div>
       </header>
 

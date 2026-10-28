@@ -3,6 +3,8 @@ import { collection, doc, query, orderBy, getDocs, setDoc, updateDoc, serverTime
 import { db, auth, functions, isFirebaseConfigured } from '@/firebase';
 import { httpsCallable } from 'firebase/functions';
 import SOSButton from '@/components/SOSButton';
+import LanguageSwitcher from '@/components/LanguageSwitcher';
+import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import type { AppUser, Contact, ActiveAlert } from '@/types';
 import { DEFAULT_DEMO_CONTACTS } from '@/constants';
@@ -23,6 +25,7 @@ interface Props {
 }
 
 const HomePage: React.FC<Props> = ({ user, onLogout }) => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
@@ -40,16 +43,18 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
   useEffect(() => {
     const loadContacts = async () => {
       if (user.isDemo || !isFirebaseConfigured() || !auth.currentUser) {
-        const saved = localStorage.getItem('safesignal_contacts');
+        const saved = localStorage.getItem('suraksha_contacts') || localStorage.getItem('safesignal_contacts');
         if (saved) {
           try {
             setContacts(JSON.parse(saved));
+            localStorage.setItem('suraksha_contacts', saved);
             return;
           } catch {
             // fallback
           }
         }
         setContacts(DEFAULT_DEMO_CONTACTS);
+        localStorage.setItem('suraksha_contacts', JSON.stringify(DEFAULT_DEMO_CONTACTS));
         localStorage.setItem('safesignal_contacts', JSON.stringify(DEFAULT_DEMO_CONTACTS));
       } else {
         try {
@@ -301,31 +306,32 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
               🚨
             </span>
             <div>
-              <h1 className="text-base font-bold text-white leading-tight">Suraksha Signal</h1>
+              <h1 className="text-base font-bold text-white leading-tight">{t('brand.name')}</h1>
               <div className="flex items-center gap-1.5 text-[11px] text-teal-400">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                <span>Monitoring Active</span>
+                <span>{t('brand.monitoring')}</span>
                 {user.isDemo && (
                   <span className="ml-1 text-[10px] px-1.5 py-0.2 bg-teal-500/20 text-teal-300 rounded font-mono">
-                    DEMO MODE
+                    {t('brand.demoMode')}
                   </span>
                 )}
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <LanguageSwitcher />
             <button
               onClick={() => navigate('/contacts')}
               className="text-xs font-medium px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
             >
-              👥 Contacts ({confirmedCount} active)
+              👥 {t('nav.contactsActive', { count: confirmedCount })}
             </button>
             <button
               onClick={onLogout}
               className="text-xs font-medium px-3 py-1.5 rounded-lg bg-red-950/40 hover:bg-red-900/60 text-red-300 border border-red-800/40 transition"
             >
-              Sign Out
+              {t('nav.signOut')}
             </button>
           </div>
         </div>

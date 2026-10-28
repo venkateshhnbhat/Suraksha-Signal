@@ -121,7 +121,7 @@ const TrackPage: React.FC = () => {
                 to="/"
                 className="inline-block px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-slate-200"
               >
-                Go to SafeSignal Home
+                Go to Suraksha Signal Home
               </Link>
             </div>
           </div>

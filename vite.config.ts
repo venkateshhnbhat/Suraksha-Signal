@@ -7,11 +7,11 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'masked-icon.svg'],
+      includeAssets: ['favicon.svg', 'apple-touch-icon.png', 'masked-icon.svg', 'pwa-192x192.png', 'pwa-512x512.png'],
       manifest: {
-        name: 'SafeSignal',
-        short_name: 'SafeSignal',
-        description: 'Quick discreet SOS and location sharing',
+        name: 'Suraksha Signal',
+        short_name: 'Suraksha Signal',
+        description: 'Discreet Emergency SOS and Real-time Location Broadcast',
         icons: [
           {
             src: 'pwa-192x192.png',
@@ -24,8 +24,8 @@ export default defineConfig({
             type: 'image/png'
           }
         ],
-        theme_color: '#00A8A8',
-        background_color: '#F5F5F5',
+        theme_color: '#0f172a',
+        background_color: '#020617',
         display: 'standalone',
         scope: '/',
         start_url: '/',
