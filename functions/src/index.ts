@@ -295,182 +295,199 @@ export const twilioWebhook = onRequest(async (req, res) => {
  * - Send email through email.ts with Resend (or mock in development/tests).
  * - Never log the code or return it to client.
  */
+/**
+ * Core handler: handleSendEmailOtp
+ */
+export async function handleSendEmailOtp(
+  data: any,
+  dbInstance = db,
+  provider = getEmailProvider()
+) {
+  const rawEmail = data?.email;
+  if (!rawEmail || typeof rawEmail !== 'string') {
+    throw new HttpsError('invalid-argument', 'A valid email address is required.');
+  }
+
+  const email = rawEmail.trim().toLowerCase();
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email) || email.length > 254) {
+    throw new HttpsError('invalid-argument', 'Please provide a valid email address.');
+  }
+
+  const emailHash = crypto.createHash('sha256').update(email).digest('hex');
+  const otpRef = dbInstance.collection('emailOtps').doc(emailHash);
+
+  const now = Date.now();
+  const existingSnap = await otpRef.get();
+
+  let sendCount = 1;
+  let windowStart: any = Timestamp ? Timestamp.fromMillis(now) : now;
+
+  if (existingSnap.exists) {
+    const docData = existingSnap.data()!;
+    const lastSentMillis = docData.lastSentAt?.toMillis ? docData.lastSentAt.toMillis() : (docData.lastSentAt || 0);
+
+    // 60-second cooldown between sends to the same email
+    if (now - lastSentMillis < 60 * 1000) {
+      throw new HttpsError(
+        'resource-exhausted',
+        'Please wait 60 seconds before requesting another code.'
+      );
+    }
+
+    // 15-minute rate limit window (max 3 sends per email per 15 minutes)
+    const windowStartMillis = docData.windowStart?.toMillis ? docData.windowStart.toMillis() : (docData.windowStart || 0);
+    const isWithinWindow = now - windowStartMillis < 15 * 60 * 1000;
+
+    if (isWithinWindow) {
+      if ((docData.sendCount || 0) >= 3) {
+        throw new HttpsError(
+          'resource-exhausted',
+          'Too many requests. Please wait 15 minutes before requesting another code.'
+        );
+      }
+      sendCount = (docData.sendCount || 0) + 1;
+      windowStart = docData.windowStart;
+    } else {
+      sendCount = 1;
+      windowStart = Timestamp ? Timestamp.fromMillis(now) : now;
+    }
+  }
+
+  // Generate 6-digit code with crypto.randomInt (never Math.random)
+  const code = crypto.randomInt(100000, 1000000).toString();
+  const codeHash = crypto.createHash('sha256').update(code).digest('hex');
+  const expiresAt = Timestamp ? Timestamp.fromMillis(now + 10 * 60 * 1000) : now + 10 * 60 * 1000; // 10 minutes expiry
+  const lastSentAt = Timestamp ? Timestamp.fromMillis(now) : now;
+
+  // Store ONLY a SHA-256 hash of the code in Firestore
+  await otpRef.set({
+    codeHash,
+    expiresAt,
+    attempts: 0,
+    lastSentAt,
+    sendCount,
+    windowStart,
+    emailHash
+  });
+
+  // Send email via provider
+  try {
+    await provider.sendOtpEmail({ to: email, code });
+  } catch (err: any) {
+    console.error('Error dispatching OTP email:', err?.message || err);
+    throw new HttpsError('internal', 'Unable to send verification email. Please try again later.');
+  }
+
+  return {
+    success: true,
+    message: 'Verification code sent.'
+  };
+}
+
+/**
+ * Callable: sendEmailOtp({ email })
+ */
 export const sendEmailOtp = onCall(
   { cors: true },
   async (request) => {
-    const rawEmail = request.data?.email;
-    if (!rawEmail || typeof rawEmail !== 'string') {
-      throw new HttpsError('invalid-argument', 'A valid email address is required.');
-    }
-
-    const email = rawEmail.trim().toLowerCase();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email) || email.length > 254) {
-      throw new HttpsError('invalid-argument', 'Please provide a valid email address.');
-    }
-
-    const emailHash = crypto.createHash('sha256').update(email).digest('hex');
-    const otpRef = db.collection('emailOtps').doc(emailHash);
-
-    const now = Date.now();
-    const existingSnap = await otpRef.get();
-
-    let sendCount = 1;
-    let windowStart = Timestamp.fromMillis(now);
-
-    if (existingSnap.exists) {
-      const data = existingSnap.data()!;
-      const lastSentMillis = data.lastSentAt?.toMillis ? data.lastSentAt.toMillis() : (data.lastSentAt || 0);
-
-      // 60-second cooldown between sends to the same email
-      if (now - lastSentMillis < 60 * 1000) {
-        throw new HttpsError(
-          'resource-exhausted',
-          'Please wait 60 seconds before requesting another code.'
-        );
-      }
-
-      // 15-minute rate limit window (max 3 sends per email per 15 minutes)
-      const windowStartMillis = data.windowStart?.toMillis ? data.windowStart.toMillis() : (data.windowStart || 0);
-      const isWithinWindow = now - windowStartMillis < 15 * 60 * 1000;
-
-      if (isWithinWindow) {
-        if ((data.sendCount || 0) >= 3) {
-          throw new HttpsError(
-            'resource-exhausted',
-            'Too many requests. Please wait 15 minutes before requesting another code.'
-          );
-        }
-        sendCount = (data.sendCount || 0) + 1;
-        windowStart = data.windowStart;
-      } else {
-        sendCount = 1;
-        windowStart = Timestamp.fromMillis(now);
-      }
-    }
-
-    // Generate 6-digit code with crypto.randomInt (never Math.random)
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const codeHash = crypto.createHash('sha256').update(code).digest('hex');
-    const expiresAt = Timestamp.fromMillis(now + 10 * 60 * 1000); // 10 minutes expiry
-    const lastSentAt = Timestamp.fromMillis(now);
-
-    // Store ONLY a SHA-256 hash of the code in Firestore
-    await otpRef.set({
-      codeHash,
-      expiresAt,
-      attempts: 0,
-      lastSentAt,
-      sendCount,
-      windowStart,
-      emailHash
-    });
-
-    // Send email via email.ts
-    try {
-      const emailProvider = getEmailProvider();
-      await emailProvider.sendOtpEmail({ to: email, code });
-    } catch (err: any) {
-      console.error('Error dispatching OTP email:', err?.message || err);
-      throw new HttpsError('internal', 'Unable to send verification email. Please try again later.');
-    }
-
-    return {
-      success: true,
-      message: 'Verification code sent.'
-    };
+    return handleSendEmailOtp(request.data);
   }
 );
 
 /**
+ * Core handler: handleVerifyEmailOtp
+ */
+export async function handleVerifyEmailOtp(
+  data: any,
+  dbInstance = db,
+  authInstance = auth
+) {
+  const rawEmail = data?.email;
+  const rawCode = data?.code;
+
+  const GENERIC_ERROR = 'Invalid or expired code.';
+
+  if (!rawEmail || !rawCode || typeof rawEmail !== 'string' || typeof rawCode !== 'string') {
+    throw new HttpsError('invalid-argument', GENERIC_ERROR);
+  }
+
+  const email = rawEmail.trim().toLowerCase();
+  const code = rawCode.trim();
+
+  if (code.length !== 6 || !/^\d{6}$/.test(code)) {
+    throw new HttpsError('invalid-argument', GENERIC_ERROR);
+  }
+
+  const emailHash = crypto.createHash('sha256').update(email).digest('hex');
+  const otpRef = dbInstance.collection('emailOtps').doc(emailHash);
+
+  const now = Date.now();
+
+  await dbInstance.runTransaction(async (transaction: any) => {
+    const docSnap = await transaction.get(otpRef);
+    if (!docSnap.exists) {
+      throw new HttpsError('invalid-argument', GENERIC_ERROR);
+    }
+
+    const docData = docSnap.data()!;
+    const attempts = typeof docData.attempts === 'number' ? docData.attempts : 0;
+    const expiresMillis = docData.expiresAt?.toMillis ? docData.expiresAt.toMillis() : (docData.expiresAt || 0);
+
+    // Reject if attempts >= 5 or expired
+    if (attempts >= 5 || expiresMillis <= now) {
+      throw new HttpsError('invalid-argument', GENERIC_ERROR);
+    }
+
+    // Timing-safe comparison of SHA-256 hashes
+    const incomingBuffer = crypto.createHash('sha256').update(code).digest();
+    const storedBuffer = Buffer.from(docData.codeHash || '', 'hex');
+
+    const isMatch =
+      incomingBuffer.length === storedBuffer.length &&
+      crypto.timingSafeEqual(incomingBuffer, storedBuffer);
+
+    if (!isMatch) {
+      // Increment attempts on every failed try
+      transaction.update(otpRef, { attempts: attempts + 1 });
+      throw new HttpsError('invalid-argument', GENERIC_ERROR);
+    }
+
+    // On success: delete the OTP doc
+    transaction.delete(otpRef);
+  });
+
+  // Find existing user or create one with emailVerified: true
+  let uid: string;
+  try {
+    const userRecord = await authInstance.getUserByEmail(email);
+    uid = userRecord.uid;
+    if (!userRecord.emailVerified) {
+      await authInstance.updateUser(uid, { emailVerified: true });
+    }
+  } catch (err: any) {
+    if (err.code === 'auth/user-not-found') {
+      const newUser = await authInstance.createUser({
+        email,
+        emailVerified: true
+      });
+      uid = newUser.uid;
+    } else {
+      console.error('Error finding or creating user:', err);
+      throw new HttpsError('internal', 'Authentication processing failed.');
+    }
+  }
+
+  const token = await authInstance.createCustomToken(uid);
+  return { token };
+}
+
+/**
  * Callable: verifyEmailOtp({ email, code })
- * - Callable, no auth required
- * - Reject if the doc is missing or expired, or if attempts >= 5
- *   (return a generic "Invalid or expired code" message; do not reveal which case).
- * - Increment attempts on every failed try, using a Firestore transaction.
- * - Compare hashes with crypto.timingSafeEqual.
- * - On success: delete the OTP doc, find the user with admin.auth().getUserByEmail or create one (emailVerified: true),
- *   and return { token: await admin.auth().createCustomToken(uid) }.
  */
 export const verifyEmailOtp = onCall(
   { cors: true },
   async (request) => {
-    const rawEmail = request.data?.email;
-    const rawCode = request.data?.code;
-
-    const GENERIC_ERROR = 'Invalid or expired code.';
-
-    if (!rawEmail || !rawCode || typeof rawEmail !== 'string' || typeof rawCode !== 'string') {
-      throw new HttpsError('invalid-argument', GENERIC_ERROR);
-    }
-
-    const email = rawEmail.trim().toLowerCase();
-    const code = rawCode.trim();
-
-    if (code.length !== 6 || !/^\d{6}$/.test(code)) {
-      throw new HttpsError('invalid-argument', GENERIC_ERROR);
-    }
-
-    const emailHash = crypto.createHash('sha256').update(email).digest('hex');
-    const otpRef = db.collection('emailOtps').doc(emailHash);
-
-    const now = Date.now();
-
-    await db.runTransaction(async (transaction) => {
-      const docSnap = await transaction.get(otpRef);
-      if (!docSnap.exists) {
-        throw new HttpsError('invalid-argument', GENERIC_ERROR);
-      }
-
-      const data = docSnap.data()!;
-      const attempts = typeof data.attempts === 'number' ? data.attempts : 0;
-      const expiresMillis = data.expiresAt?.toMillis ? data.expiresAt.toMillis() : (data.expiresAt || 0);
-
-      // Reject if attempts >= 5 or expired
-      if (attempts >= 5 || expiresMillis <= now) {
-        throw new HttpsError('invalid-argument', GENERIC_ERROR);
-      }
-
-      // Timing-safe comparison of SHA-256 hashes
-      const incomingBuffer = crypto.createHash('sha256').update(code).digest();
-      const storedBuffer = Buffer.from(data.codeHash || '', 'hex');
-
-      const isMatch =
-        incomingBuffer.length === storedBuffer.length &&
-        crypto.timingSafeEqual(incomingBuffer, storedBuffer);
-
-      if (!isMatch) {
-        // Increment attempts on every failed try
-        transaction.update(otpRef, { attempts: attempts + 1 });
-        throw new HttpsError('invalid-argument', GENERIC_ERROR);
-      }
-
-      // On success: delete the OTP doc
-      transaction.delete(otpRef);
-    });
-
-    // Find existing user or create one with emailVerified: true
-    let uid: string;
-    try {
-      const userRecord = await auth.getUserByEmail(email);
-      uid = userRecord.uid;
-      if (!userRecord.emailVerified) {
-        await auth.updateUser(uid, { emailVerified: true });
-      }
-    } catch (err: any) {
-      if (err.code === 'auth/user-not-found') {
-        const newUser = await auth.createUser({
-          email,
-          emailVerified: true
-        });
-        uid = newUser.uid;
-      } else {
-        console.error('Error finding or creating user:', err);
-        throw new HttpsError('internal', 'Authentication processing failed.');
-      }
-    }
-
-    const token = await auth.createCustomToken(uid);
-    return { token };
+    return handleVerifyEmailOtp(request.data);
   }
 );

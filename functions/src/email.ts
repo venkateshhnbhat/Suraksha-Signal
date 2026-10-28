@@ -73,3 +73,4 @@ export const getEmailProvider = (): EmailProvider => {
 export const setEmailProvider = (provider: EmailProvider | null) => {
   defaultProvider = provider;
 };
+
