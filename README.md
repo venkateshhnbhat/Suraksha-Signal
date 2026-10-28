@@ -67,5 +67,64 @@ npm run build
 
 ---
 
+## ✉️ Email OTP Authentication Setup (Resend & Cloud Functions)
+
+> [!NOTE]
+> **Firebase Blaze Plan Requirement**: Google Cloud Functions (2nd gen) requires the **Firebase Blaze (Pay as you go)** plan to permit outbound network calls (to Resend / SMS providers) and deploy cloud run services. The free quota covers extensive developmental usage.
+
+### 1. Create a Resend Account & Verify Domain
+1. Sign up for a free account at [Resend](https://resend.com/).
+2. Navigate to **Domains** -> **Add Domain**.
+3. Add your custom domain (e.g. `mail.yourdomain.com` or `yourdomain.com`).
+4. Configure the DNS records (DKIM, SPF, MX) at your DNS registrar as specified by Resend until verified.
+5. Create an API Key in **API Keys** with "Sending access".
+
+### 2. Configure Firebase Secrets & Cloud Function Variables
+Store your Resend API key securely in Google Cloud Secret Manager via the Firebase CLI (never commit keys to source control):
+```bash
+firebase functions:secrets:set RESEND_API_KEY
+```
+When prompted, paste your secret Resend API key (`re_...`).
+
+Set the sending address in `functions/.env` or runtime environment:
+```env
+EMAIL_FROM="Suraksha Signal <noreply@yourdomain.com>"
+```
+
+### 3. Deploying Cloud Functions and Security Rules
+Deploy your backend functions and Firestore security rules to production:
+```bash
+firebase deploy --only functions,firestore:rules
+```
+
+---
+
+## 🧪 Local Emulators & Automated Testing
+
+Suraksha Signal includes full local emulator configurations for Firebase Auth, Firestore, and Cloud Functions in `firebase.json`.
+
+### 1. Running Firebase Emulators Locally
+Make sure you have Java installed (required for the Firestore emulator), then run:
+```bash
+firebase emulators:start
+```
+This boots:
+- **Auth Emulator**: `http://localhost:9099`
+- **Firestore Emulator**: `http://localhost:8080`
+- **Functions Emulator**: `http://localhost:5001`
+- **Emulator UI Suite**: `http://localhost:4000`
+
+### 2. Running Automated Tests
+Run unit and integration test suites (including 6-digit OTP verification, rate limiting, timing-safe hashing, and AuthPage frontend flows):
+```bash
+npm test
+```
+To run tests in interactive watch mode:
+```bash
+npm run test:watch
+```
+
+---
+
 ## 📄 License
 MIT License
