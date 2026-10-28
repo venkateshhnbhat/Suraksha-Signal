@@ -1,7 +1,7 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, RecaptchaVerifier, signInWithPhoneNumber, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
-import { getFunctions, Functions } from 'firebase/functions';
+import { getFunctions, Functions, httpsCallable } from 'firebase/functions';
 
 export const isFirebaseConfigured = (): boolean => {
   const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
@@ -57,4 +57,22 @@ export const setupRecaptcha = (containerId: string) => {
 
 export const sendPhoneOtp = async (phoneNumber: string, appVerifier: RecaptchaVerifier) => {
   return signInWithPhoneNumber(auth, phoneNumber, appVerifier);
+};
+
+export const requestEmailOtp = async (email: string) => {
+  const sendEmailOtpCallable = httpsCallable<{ email: string }, { success: boolean; message: string }>(
+    functions,
+    'sendEmailOtp'
+  );
+  const result = await sendEmailOtpCallable({ email });
+  return result.data;
+};
+
+export const confirmEmailOtp = async (email: string, code: string) => {
+  const verifyEmailOtpCallable = httpsCallable<{ email: string; code: string }, { token: string }>(
+    functions,
+    'verifyEmailOtp'
+  );
+  const result = await verifyEmailOtpCallable({ email, code });
+  return result.data;
 };

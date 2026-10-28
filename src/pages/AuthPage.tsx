@@ -6,9 +6,18 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  signInWithCustomToken
 } from 'firebase/auth';
-import { auth, googleProvider, setupRecaptcha, sendPhoneOtp, isFirebaseConfigured } from '@/firebase';
+import {
+  auth,
+  googleProvider,
+  setupRecaptcha,
+  sendPhoneOtp,
+  isFirebaseConfigured,
+  requestEmailOtp,
+  confirmEmailOtp
+} from '@/firebase';
 import { useNavigate } from 'react-router-dom';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import type { AppUser } from '@/types';
@@ -17,7 +26,7 @@ interface Props {
   onLoginDemo?: (user: AppUser) => void;
 }
 
-type AuthTab = 'email' | 'phone';
+type AuthTab = 'email' | 'phone' | 'password';
 type EmailMode = 'signin' | 'signup';
 
 const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
@@ -36,6 +45,20 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
   // Tab & mode states
   const [activeTab, setActiveTab] = useState<AuthTab>('email');
   const [emailMode, setEmailMode] = useState<EmailMode>('signin');
+
+  // Email OTP states
+  const [emailOtpAddress, setEmailOtpAddress] = useState('');
+  const [emailOtpCode, setEmailOtpCode] = useState('');
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [emailCountdown, setEmailCountdown] = useState(0);
+
+  useEffect(() => {
+    if (emailCountdown <= 0) return;
+    const timer = setInterval(() => {
+      setEmailCountdown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [emailCountdown]);
 
   // Form states
   const [name, setName] = useState('');
@@ -74,6 +97,76 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
       localStorage.setItem('safesignal_demo_user', JSON.stringify(demoUser));
     }
     navigate('/');
+  };
+
+  const handleSendEmailOtp = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setError(null);
+    setSuccessMsg(null);
+
+    const trimmed = emailOtpAddress.trim().toLowerCase();
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!trimmed || !emailRegex.test(trimmed)) {
+      setError('Please enter a valid email address (e.g. name@example.com).');
+      return;
+    }
+
+    if (!hasFirebaseConfig) {
+      setError('Email OTP sign-in requires Firebase configuration. Please use Demo mode.');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await requestEmailOtp(trimmed);
+      setEmailOtpSent(true);
+      setEmailCountdown(60);
+      setSuccessMsg(`A 6-digit login code has been sent to ${trimmed}.`);
+    } catch (err: any) {
+      console.warn('requestEmailOtp error:', err);
+      const msg = err.message || '';
+      if (msg.includes('60 seconds') || err.code === 'functions/resource-exhausted') {
+        if (msg.includes('15 minutes') || msg.includes('Too many requests')) {
+          setError('Too many requests. Please wait 15 minutes before requesting another code.');
+        } else {
+          setError('Please wait 60 seconds before requesting another code.');
+        }
+      } else if (msg.includes('valid email') || err.code === 'functions/invalid-argument') {
+        setError('Please enter a valid email address.');
+      } else {
+        setError(err.message || 'Failed to send verification code. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyEmailOtp = async (codeToVerify?: string) => {
+    const code = (codeToVerify || emailOtpCode).trim();
+    if (!code || code.length !== 6) {
+      setError('Please enter the 6-digit code sent to your email.');
+      return;
+    }
+
+    setError(null);
+    setSuccessMsg(null);
+
+    try {
+      setLoading(true);
+      const { token } = await confirmEmailOtp(emailOtpAddress.trim().toLowerCase(), code);
+      await signInWithCustomToken(auth, token);
+      navigate('/');
+    } catch (err: any) {
+      console.warn('confirmEmailOtp error:', err);
+      const msg = err.message || '';
+      if (msg.includes('Invalid or expired code') || err.code === 'functions/invalid-argument') {
+        setError('Invalid or expired code. Please verify the code or request a new one.');
+      } else {
+        setError(err.message || 'Failed to verify code. Please try again.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleEmailSubmit = async (e: React.FormEvent) => {
@@ -308,16 +401,18 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
           <h1 className={`text-2xl font-bold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
             {activeTab === 'phone'
               ? 'Phone Verification'
-              : emailMode === 'signin'
-              ? 'Welcome Back'
-              : 'Create Suraksha Account'}
+              : activeTab === 'password'
+              ? emailMode === 'signin'
+                ? 'Welcome Back'
+                : 'Create Suraksha Account'
+              : 'Sign In with Email'}
           </h1>
           <p className={`text-xs mt-1.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
             Discreet Emergency SOS & Live GPS Safety Network
           </p>
         </div>
 
-        {/* Auth Method Navigation Tabs (Email vs Phone) */}
+        {/* Auth Method Navigation Tabs (Email OTP vs Phone OTP vs Password) */}
         <div
           className={`flex rounded-2xl p-1 mb-5 border ${
             isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
@@ -328,6 +423,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
             onClick={() => {
               setActiveTab('email');
               setError(null);
+              setSuccessMsg(null);
             }}
             className={`flex-1 py-2 text-xs font-semibold rounded-xl transition duration-150 flex items-center justify-center gap-1.5 ${
               activeTab === 'email'
@@ -339,13 +435,14 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <span>✉️</span> Email & Password
+            <span>✉️</span> Email OTP
           </button>
           <button
             type="button"
             onClick={() => {
               setActiveTab('phone');
               setError(null);
+              setSuccessMsg(null);
             }}
             className={`flex-1 py-2 text-xs font-semibold rounded-xl transition duration-150 flex items-center justify-center gap-1.5 ${
               activeTab === 'phone'
@@ -358,6 +455,25 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
             }`}
           >
             <span>📱</span> Phone OTP
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setActiveTab('password');
+              setError(null);
+              setSuccessMsg(null);
+            }}
+            className={`flex-1 py-2 text-xs font-semibold rounded-xl transition duration-150 flex items-center justify-center gap-1.5 ${
+              activeTab === 'password'
+                ? isDark
+                  ? 'bg-slate-800 text-teal-400 shadow-sm shadow-slate-900'
+                  : 'bg-white text-teal-600 shadow-sm'
+                : isDark
+                ? 'text-slate-400 hover:text-slate-200'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>🔑</span> Password
           </button>
         </div>
 
@@ -388,8 +504,141 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
           </div>
         )}
 
-        {/* TAB 1: EMAIL & PASSWORD (SIGN IN / SIGN UP) */}
+        {/* TAB 1: EMAIL 6-DIGIT OTP LOGIN */}
         {activeTab === 'email' && (
+          <div className="space-y-4">
+            {!hasFirebaseConfig && (
+              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2">
+                <span>ℹ️</span>
+                <span>
+                  Email login requires Firebase Cloud Functions configuration. In demo mode, please use the 1-Click Demo Session below.
+                </span>
+              </div>
+            )}
+
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className={`block text-[11px] font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                  Email Address
+                </label>
+                {emailOtpSent && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmailOtpSent(false);
+                      setEmailOtpCode('');
+                      setError(null);
+                    }}
+                    disabled={!hasFirebaseConfig || loading}
+                    className="text-[11px] text-teal-400 hover:underline"
+                  >
+                    Change email
+                  </button>
+                )}
+              </div>
+
+              <div className="relative">
+                <input
+                  type="email"
+                  required
+                  placeholder="you@example.com"
+                  value={emailOtpAddress}
+                  onChange={(e) => setEmailOtpAddress(e.target.value)}
+                  disabled={!hasFirebaseConfig || loading || emailOtpSent}
+                  className={`w-full rounded-xl pl-9 pr-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border disabled:opacity-50 ${
+                    isDark
+                      ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
+                      : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-teal-500'
+                  }`}
+                />
+                <span className="absolute left-3 top-2.5 text-slate-400 text-sm">✉️</span>
+              </div>
+            </div>
+
+            {!emailOtpSent ? (
+              <button
+                type="button"
+                onClick={handleSendEmailOtp}
+                disabled={!hasFirebaseConfig || loading || !emailOtpAddress.trim()}
+                className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {loading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                    <span>Sending verification code…</span>
+                  </>
+                ) : (
+                  <span>Send code</span>
+                )}
+              </button>
+            ) : (
+              <div className="space-y-3.5 pt-1">
+                <div>
+                  <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                    6-Digit Security Code
+                  </label>
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={6}
+                    placeholder="••••••"
+                    value={emailOtpCode}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setEmailOtpCode(digits);
+                      if (digits.length === 6) {
+                        handleVerifyEmailOtp(digits);
+                      }
+                    }}
+                    disabled={!hasFirebaseConfig || loading}
+                    className={`w-full text-center tracking-[0.4em] text-xl font-mono rounded-xl px-3.5 py-2.5 transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border disabled:opacity-50 ${
+                      isDark
+                        ? 'bg-slate-950 border-slate-800 text-slate-100 focus:border-teal-500'
+                        : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-teal-500'
+                    }`}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleVerifyEmailOtp()}
+                  disabled={!hasFirebaseConfig || loading || emailOtpCode.length < 6}
+                  className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {loading ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                      <span>Verifying code…</span>
+                    </>
+                  ) : (
+                    <span>Verify & Sign In</span>
+                  )}
+                </button>
+
+                <div className="text-center pt-1">
+                  {emailCountdown > 0 ? (
+                    <span className="text-xs text-slate-400">
+                      Resend code in <strong className="text-teal-400">{emailCountdown}s</strong>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={handleSendEmailOtp}
+                      disabled={loading || !hasFirebaseConfig}
+                      className="text-xs font-semibold text-teal-400 hover:text-teal-300 transition"
+                    >
+                      Didn't receive the code? Resend code
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB 2: EMAIL & PASSWORD (SIGN IN / SIGN UP) */}
+        {activeTab === 'password' && (
           <div>
             {/* Sub-toggle: Sign In vs Sign Up */}
             <div className="flex items-center justify-center gap-2 mb-4">
