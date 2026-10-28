@@ -11,18 +11,23 @@ import type { AppUser } from '@/types';
 
 export type { AppUser };
 
-const App: React.FC = () => {
-  const [user, setUser] = useState<AppUser | null>(() => {
-    const saved = localStorage.getItem('safesignal_demo_user');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return null;
-      }
+const getStoredDemoUser = (): AppUser | null => {
+  const saved = localStorage.getItem('suraksha_demo_user') || localStorage.getItem('safesignal_demo_user');
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved);
+      // Migrate key if needed
+      localStorage.setItem('suraksha_demo_user', saved);
+      return parsed;
+    } catch {
+      return null;
     }
-    return null;
-  });
+  }
+  return null;
+};
+
+const App: React.FC = () => {
+  const [user, setUser] = useState<AppUser | null>(getStoredDemoUser);
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
@@ -48,16 +53,7 @@ const App: React.FC = () => {
             });
           } else {
             // Check if demo user is active in localStorage
-            const saved = localStorage.getItem('safesignal_demo_user');
-            if (saved) {
-              try {
-                setUser(JSON.parse(saved));
-              } catch {
-                setUser(null);
-              }
-            } else {
-              setUser(null);
-            }
+            setUser(getStoredDemoUser());
           }
           setChecking(false);
         },
@@ -80,11 +76,13 @@ const App: React.FC = () => {
   }, []);
 
   const handleLoginDemo = (demoUser: AppUser) => {
+    localStorage.setItem('suraksha_demo_user', JSON.stringify(demoUser));
     localStorage.setItem('safesignal_demo_user', JSON.stringify(demoUser));
     setUser(demoUser);
   };
 
   const handleLogout = () => {
+    localStorage.removeItem('suraksha_demo_user');
     localStorage.removeItem('safesignal_demo_user');
     setUser(null);
     try {
@@ -98,14 +96,28 @@ const App: React.FC = () => {
     return (
       <div className="flex h-screen flex-col items-center justify-center bg-slate-900 text-white">
         <div className="w-12 h-12 border-4 border-teal-500 border-t-transparent rounded-full animate-spin mb-4" />
-        <h2 className="text-lg font-semibold tracking-wide text-teal-400">SafeSignal</h2>
+        <h2 className="text-lg font-semibold tracking-wide text-teal-400">Suraksha Signal</h2>
         <p className="text-xs text-slate-400 mt-1">Initializing secure safety environment…</p>
       </div>
     );
   }
 
+  const hasFirebase = isFirebaseConfigured();
+
   return (
     <ErrorBoundary>
+      {/* Explicit Demo Banner when Firebase is not configured */}
+      {!hasFirebase && (
+        <aside
+          role="status"
+          aria-label="Demo mode active notice"
+          className="bg-amber-950/80 border-b border-amber-600/60 text-amber-200 px-4 py-2 text-xs text-center flex items-center justify-center gap-2 sticky top-0 z-50 backdrop-blur-md"
+        >
+          <span className="font-bold">⚠️ Running in Demo Mode:</span>
+          <span>Firebase environment is unconfigured. SMS alerts and cloud persistence are simulated locally.</span>
+        </aside>
+      )}
+
       <Router>
         <Routes>
           <Route
