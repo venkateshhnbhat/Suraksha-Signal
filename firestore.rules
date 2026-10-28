@@ -1,0 +1,35 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // User profile and contacts
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+
+      match /contacts/{contactId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+
+    // Emergency alerts
+    match /alerts/{alertId} {
+      // Alert creation: only authenticated owner
+      allow create: if request.auth != null && request.resource.data.ownerUid == request.auth.uid;
+      
+      // Reading alerts: owner can read full alert, or public can read for live tracking (/track/:alertId)
+      allow read: if true;
+
+      // Updating alerts: owner can update only location and status fields (no delivery tamper)
+      allow update: if request.auth != null 
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['latitude', 'longitude', 'updatedAt', 'status']);
+
+      // No client deletes allowed
+      allow delete: if false;
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
