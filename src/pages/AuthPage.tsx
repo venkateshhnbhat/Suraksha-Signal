@@ -18,6 +18,7 @@ import {
   requestEmailOtp,
   confirmEmailOtp
 } from '@/firebase';
+import { signInWithGoogleSupabase, isSupabaseConfigured } from '@/supabase';
 import { useNavigate } from 'react-router-dom';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import type { AppUser } from '@/types';
@@ -248,6 +249,14 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
     try {
       setLoading(true);
       setError(null);
+
+      // 1. If Supabase is configured, use Supabase Google OAuth
+      if (isSupabaseConfigured) {
+        await signInWithGoogleSupabase();
+        return;
+      }
+
+      // 2. Fall back to Firebase / Demo mode
       if (!hasFirebaseConfig) {
         handleDemoSignIn('google.user@safesignal.app', 'Google Account User');
         return;
@@ -255,7 +264,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
       await signInWithPopup(auth, googleProvider);
       navigate('/');
     } catch (e: any) {
-      console.error(e);
+      console.error('Google Sign-In error:', e);
       if (
         e.code?.includes('api-key-not-valid') ||
         e.code?.includes('invalid-api-key') ||

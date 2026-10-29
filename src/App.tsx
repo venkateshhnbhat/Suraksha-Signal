@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
 import { auth, isFirebaseConfigured } from '@/firebase';
+import { supabase } from '@/supabase';
 import AuthPage from '@/pages/AuthPage';
 import HomePage from '@/pages/HomePage';
 import ContactsPage from '@/pages/ContactsPage';
@@ -36,6 +37,50 @@ const App: React.FC = () => {
       setChecking(false);
     }, 1500);
 
+    // 1. Listen for Supabase authentication sessions (e.g. Google OAuth redirect)
+    let supabaseUnsubscribe: (() => void) | null = null;
+    try {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session?.user) {
+          clearTimeout(timer);
+          setUser({
+            uid: session.user.id,
+            displayName:
+              session.user.user_metadata?.full_name ||
+              session.user.user_metadata?.name ||
+              session.user.email?.split('@')[0] ||
+              'Google User',
+            email: session.user.email,
+            phoneNumber: session.user.phone || undefined,
+            isDemo: false
+          });
+          setChecking(false);
+        }
+      });
+
+      const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+        if (session?.user) {
+          clearTimeout(timer);
+          setUser({
+            uid: session.user.id,
+            displayName:
+              session.user.user_metadata?.full_name ||
+              session.user.user_metadata?.name ||
+              session.user.email?.split('@')[0] ||
+              'Google User',
+            email: session.user.email,
+            phoneNumber: session.user.phone || undefined,
+            isDemo: false
+          });
+          setChecking(false);
+        }
+      });
+      supabaseUnsubscribe = () => data.subscription.unsubscribe();
+    } catch (e) {
+      console.warn('Supabase auth state listener warning:', e);
+    }
+
+    // 2. Listen for Firebase authentication
     try {
       const unsubscribe = onAuthStateChanged(
         auth,
@@ -65,6 +110,9 @@ const App: React.FC = () => {
       return () => {
         clearTimeout(timer);
         unsubscribe();
+        if (supabaseUnsubscribe) {
+          supabaseUnsubscribe();
+        }
       };
     } catch (err) {
       console.warn('Firebase onAuthStateChanged error caught:', err);
@@ -85,6 +133,11 @@ const App: React.FC = () => {
     setUser(null);
     try {
       auth.signOut();
+    } catch {
+      // ignore
+    }
+    try {
+      supabase.auth.signOut();
     } catch {
       // ignore
     }
