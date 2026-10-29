@@ -3,9 +3,18 @@ import { getAuth, GoogleAuthProvider, RecaptchaVerifier, signInWithPhoneNumber, 
 import { getFirestore, Firestore } from 'firebase/firestore';
 import { getFunctions, Functions, httpsCallable } from 'firebase/functions';
 
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyDyG9lpiGtesh64FCeK5DtncMF2RQYplu4',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'suraksha-signal-16b7a.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'suraksha-signal-16b7a',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'suraksha-signal-16b7a.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '119588706528',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:119588706528:web:947e82e8dd3890a9c25885'
+};
+
 export const isFirebaseConfigured = (): boolean => {
-  const apiKey = import.meta.env.VITE_FIREBASE_API_KEY;
-  const projectId = import.meta.env.VITE_FIREBASE_PROJECT_ID;
+  const apiKey = firebaseConfig.apiKey;
+  const projectId = firebaseConfig.projectId;
   return Boolean(
     apiKey &&
     projectId &&
@@ -13,15 +22,6 @@ export const isFirebaseConfigured = (): boolean => {
     !apiKey.includes('Demo') &&
     !projectId.includes('your_')
   );
-};
-
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || '',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || '',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || '',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || '',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || ''
 };
 
 // Safe initialization without hardcoded fake keys
