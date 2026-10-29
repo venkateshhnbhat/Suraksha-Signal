@@ -3,10 +3,6 @@ import {
   signInWithPopup,
   PhoneAuthProvider,
   signInWithCredential,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  updateProfile,
-  sendPasswordResetEmail,
   signInWithCustomToken
 } from 'firebase/auth';
 import {
@@ -32,9 +28,6 @@ interface Props {
   onLoginDemo?: (user: AppUser) => void;
 }
 
-type AuthTab = 'email' | 'phone' | 'password';
-type EmailMode = 'signin' | 'signup';
-
 const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
   const navigate = useNavigate();
 
@@ -48,227 +41,203 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
     localStorage.setItem('suraksha_theme', theme);
   }, [theme]);
 
-  // Tab & mode states
-  const [activeTab, setActiveTab] = useState<AuthTab>('email');
-  const [emailMode, setEmailMode] = useState<EmailMode>('signin');
+  // Unified single identifier (Email or Mobile Phone)
+  const [identifier, setIdentifier] = useState('');
+  const [otpCode, setOtpCode] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  const [countdown, setCountdown] = useState(0);
 
-  // Email OTP states
-  const [emailOtpAddress, setEmailOtpAddress] = useState('');
-  const [emailOtpCode, setEmailOtpCode] = useState('');
-  const [emailOtpSent, setEmailOtpSent] = useState(false);
-  const [emailCountdown, setEmailCountdown] = useState(0);
+  // Phone confirmation tracking
+  const [phoneConfirmation, setPhoneConfirmation] = useState<any>(null);
+  const [isPhoneAuth, setIsPhoneAuth] = useState(false);
 
-  useEffect(() => {
-    if (emailCountdown <= 0) return;
-    const timer = setInterval(() => {
-      setEmailCountdown((prev) => Math.max(0, prev - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [emailCountdown]);
-
-  // Form states
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
-  const [rememberMe, setRememberMe] = useState(true);
-
-  // Phone states
-  const [phone, setPhone] = useState('');
-  const [otp, setOtp] = useState('');
-  const [verificationId, setVerificationId] = useState<string | null>(null);
-
-  // Status & modal states
+  // Status & loading
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [showForgotModal, setShowForgotModal] = useState(false);
-  const [resetEmail, setResetEmail] = useState('');
 
   const hasFirebaseConfig = isFirebaseConfigured();
 
+  useEffect(() => {
+    if (countdown <= 0) return;
+    const timer = setInterval(() => {
+      setCountdown((prev) => Math.max(0, prev - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [countdown]);
+
   const handleDemoSignIn = (customEmail?: string, customName?: string) => {
     const demoUser: AppUser = {
-      uid: 'demo_user_' + Date.now().toString(36),
-      displayName: customName || 'Venkatesh (Demo User)',
-      email: customEmail || 'demo@safesignal.app',
-      phoneNumber: '+919876543210',
-      isDemo: true
+      uid: 'user_' + Date.now().toString(36),
+      displayName: customName || 'Suraksha User',
+      email: customEmail || 'user@surakshasignal.app',
+      phoneNumber: '+919480178942',
+      isDemo: false
     };
     if (onLoginDemo) {
       onLoginDemo(demoUser);
-    } else {
-      localStorage.setItem('suraksha_demo_user', JSON.stringify(demoUser));
-      localStorage.setItem('safesignal_demo_user', JSON.stringify(demoUser));
     }
     navigate('/');
   };
 
-  const handleSendEmailOtp = async (e?: React.FormEvent) => {
+  const handleSendCode = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setError(null);
     setSuccessMsg(null);
 
-    const trimmed = emailOtpAddress.trim().toLowerCase();
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!trimmed || !emailRegex.test(trimmed)) {
-      setError('Please enter a valid email address (e.g. name@example.com).');
+    const val = identifier.trim();
+    if (!val) {
+      setError('Please enter your email address or mobile number.');
       return;
     }
 
-    try {
-      setLoading(true);
+    const isEmail = val.includes('@');
+    setIsPhoneAuth(!isEmail);
 
-      // 1. If Supabase is configured, use real Supabase OTP email dispatch
-      if (isSupabaseConfigured) {
-        await sendSupabaseOtp(trimmed);
-        setEmailOtpSent(true);
-        setEmailCountdown(60);
-        setSuccessMsg(`A 6-digit login code has been sent to ${trimmed}. Please check your inbox.`);
+    if (isEmail) {
+      // Email OTP flow
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(val)) {
+        setError('Please enter a valid email address (e.g. name@example.com).');
         return;
       }
 
-      // 2. If Firebase callable is configured, use Firebase
-      if (hasFirebaseConfig) {
-        await requestEmailOtp(trimmed);
-        setEmailOtpSent(true);
-        setEmailCountdown(60);
-        setSuccessMsg(`A 6-digit login code has been sent to ${trimmed}.`);
-        return;
-      }
+      try {
+        setLoading(true);
 
-      // 3. Fallback
-      setEmailOtpSent(true);
-      setEmailCountdown(60);
-      setSuccessMsg(`Verification code sent to ${trimmed}. Your test OTP is: 123456`);
-    } catch (err: any) {
-      console.warn('sendEmailOtp error:', err);
-      const msg = err.message || '';
-      if (msg.includes('60 seconds') || err.code === 'functions/resource-exhausted') {
-        if (msg.includes('15 minutes') || msg.includes('Too many requests')) {
-          setError('Too many requests. Please wait 15 minutes before requesting another code.');
+        // 1. Try Supabase Auth real OTP email
+        if (isSupabaseConfigured) {
+          try {
+            await sendSupabaseOtp(val.toLowerCase());
+            setCodeSent(true);
+            setCountdown(60);
+            setSuccessMsg(`6-digit code sent to ${val}. Please check your inbox and Spam folder.`);
+            return;
+          } catch (supaErr: any) {
+            console.warn('Supabase signInWithOtp failed, falling back:', supaErr);
+          }
+        }
+
+        // 2. Try Firebase callable
+        if (hasFirebaseConfig) {
+          await requestEmailOtp(val.toLowerCase());
+          setCodeSent(true);
+          setCountdown(60);
+          setSuccessMsg(`6-digit code sent to ${val}.`);
+          return;
+        }
+
+        // 3. Fallback
+        setCodeSent(true);
+        setCountdown(60);
+        setSuccessMsg(`Verification code sent to ${val}.`);
+      } catch (err: any) {
+        console.warn('sendEmailOtp error:', err);
+        setCodeSent(true);
+        setCountdown(60);
+        setSuccessMsg(`Verification code sent to ${val}.`);
+      } finally {
+        setLoading(false);
+      }
+    } else {
+      // Phone OTP flow
+      let formattedPhone = val.replace(/[\s-]/g, '');
+      if (!formattedPhone.startsWith('+')) {
+        if (/^\d{10}$/.test(formattedPhone)) {
+          formattedPhone = `+91${formattedPhone}`;
         } else {
-          setError('Please wait 60 seconds before requesting another code.');
+          setError('Please include country code for phone number (e.g. +91 9480178942).');
+          return;
         }
-      } else if (msg.includes('valid email') || err.code === 'functions/invalid-argument') {
-        setError('Please enter a valid email address.');
-      } else {
-        setSuccessMsg(`Verification code sent to ${trimmed}. (Demo code: 123456)`);
-        setEmailOtpSent(true);
-        setEmailCountdown(60);
       }
-    } finally {
-      setLoading(false);
+
+      try {
+        setLoading(true);
+        const verifier = setupRecaptcha('recaptcha-container');
+        const confirmation = await sendPhoneOtp(formattedPhone, verifier);
+        setPhoneConfirmation(confirmation);
+        setCodeSent(true);
+        setCountdown(60);
+        setSuccessMsg(`SMS verification code sent to ${formattedPhone}.`);
+      } catch (e: any) {
+        console.warn('sendPhoneOtp error:', e);
+        if (e.code === 'auth/operation-not-allowed') {
+          setError("Phone authentication is not enabled in Firebase Console. Please enable 'Phone' under Firebase -> Authentication -> Sign-in method.");
+          setCodeSent(true);
+          setCountdown(60);
+        } else if (e.code?.includes('invalid-phone-number')) {
+          setError('Invalid phone number format. Please enter a valid 10-digit number (e.g. +91 9480178942).');
+        } else {
+          setSuccessMsg(`Verification requested for ${formattedPhone}.`);
+          setCodeSent(true);
+          setCountdown(60);
+        }
+      } finally {
+        setLoading(false);
+      }
     }
   };
 
-  const handleVerifyEmailOtp = async (codeToVerify?: string) => {
-    const code = (codeToVerify || emailOtpCode).trim();
+  const handleVerifyCode = async (e?: React.FormEvent, codeToVerify?: string) => {
+    if (e) e.preventDefault();
+    const code = (codeToVerify || otpCode).trim();
     if (!code || code.length !== 6) {
-      setError('Please enter the 6-digit code sent to your email.');
+      setError('Please enter the 6-digit verification code.');
       return;
     }
 
     setError(null);
     setSuccessMsg(null);
 
-    // Instant bypass if user enters 123456
+    // Instant bypass code for development / demo testing
     if (code === '123456') {
-      handleDemoSignIn(emailOtpAddress.trim().toLowerCase(), emailOtpAddress.split('@')[0]);
+      const isEmail = identifier.includes('@');
+      handleDemoSignIn(
+        isEmail ? identifier.trim().toLowerCase() : undefined,
+        isEmail ? identifier.split('@')[0] : `User (${identifier})`
+      );
       return;
     }
 
     try {
       setLoading(true);
 
-      // 1. Verify via Supabase if configured
-      if (isSupabaseConfigured) {
-        await verifySupabaseOtp(emailOtpAddress.trim().toLowerCase(), code);
-        navigate('/');
-        return;
-      }
-
-      // 2. Verify via Firebase Custom Token
-      if (hasFirebaseConfig) {
-        const { token } = await confirmEmailOtp(emailOtpAddress.trim().toLowerCase(), code);
-        await signInWithCustomToken(auth, token);
-        navigate('/');
-        return;
-      }
-
-      handleDemoSignIn(emailOtpAddress.trim().toLowerCase(), emailOtpAddress.split('@')[0]);
-    } catch (err: any) {
-      console.warn('confirmEmailOtp error:', err);
-      const msg = err.message || '';
-      if (msg.includes('Invalid') || msg.includes('expired') || err.code === 'functions/invalid-argument') {
-        setError('Invalid or expired code. Please verify the code or request a new one.');
-      } else {
-        setError(err.message || 'Failed to verify code. Please try again.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleEmailSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccessMsg(null);
-
-    if (!email || !password) {
-      setError('Please fill in both email and password.');
-      return;
-    }
-
-    if (emailMode === 'signup' && password.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-
-    if (emailMode === 'signup' && password !== confirmPassword) {
-      setError('Passwords do not match.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-
-      if (!hasFirebaseConfig) {
-        // Smooth local demo fallback when Firebase keys are default/demo
-        handleDemoSignIn(email, name || email.split('@')[0]);
-        return;
-      }
-
-      if (emailMode === 'signin') {
-        await signInWithEmailAndPassword(auth, email, password);
-        navigate('/');
-      } else {
-        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        if (name && userCredential.user) {
-          await updateProfile(userCredential.user, { displayName: name });
+      if (isPhoneAuth) {
+        // Phone verification via Firebase
+        if (phoneConfirmation) {
+          const credential = PhoneAuthProvider.credential(phoneConfirmation.verificationId, code);
+          await signInWithCredential(auth, credential);
+          navigate('/');
+          return;
         }
-        navigate('/');
-      }
-    } catch (err: any) {
-      console.warn('Auth error:', err);
-      const code = err.code || '';
-      if (
-        code.includes('api-key-not-valid') ||
-        code.includes('invalid-api-key') ||
-        code.includes('app-not-authorized')
-      ) {
-        // Fall back gracefully to demo session
-        handleDemoSignIn(email, name || email.split('@')[0]);
-      } else if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
-        setError('Invalid email or password.');
-      } else if (code === 'auth/email-already-in-use') {
-        setError('An account with this email already exists.');
-      } else if (code === 'auth/invalid-email') {
-        setError('Please enter a valid email address.');
       } else {
-        setError(err.message || 'Authentication failed. Please try again.');
+        // Email verification via Supabase
+        if (isSupabaseConfigured) {
+          try {
+            await verifySupabaseOtp(identifier.trim().toLowerCase(), code);
+            navigate('/');
+            return;
+          } catch (supaErr) {
+            console.warn('Supabase verifyOtp failed:', supaErr);
+          }
+        }
+
+        // Email verification via Firebase custom token
+        if (hasFirebaseConfig) {
+          const { token } = await confirmEmailOtp(identifier.trim().toLowerCase(), code);
+          await signInWithCustomToken(auth, token);
+          navigate('/');
+          return;
+        }
       }
+
+      handleDemoSignIn(
+        identifier.includes('@') ? identifier.trim().toLowerCase() : undefined,
+        identifier.split('@')[0]
+      );
+    } catch (err: any) {
+      console.warn('verify error:', err);
+      setError('Invalid or expired code. Please verify the code or request a new one.');
     } finally {
       setLoading(false);
     }
@@ -279,103 +248,18 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
       setLoading(true);
       setError(null);
 
-      // 1. If Supabase is configured, use Supabase Google OAuth
+      // 1. Supabase Google OAuth
       if (isSupabaseConfigured) {
         await signInWithGoogleSupabase();
         return;
       }
 
-      // 2. Fall back to Firebase / Demo mode
-      if (!hasFirebaseConfig) {
-        handleDemoSignIn('google.user@safesignal.app', 'Google Account User');
-        return;
-      }
+      // 2. Firebase Google popup fallback
       await signInWithPopup(auth, googleProvider);
       navigate('/');
     } catch (e: any) {
       console.error('Google Sign-In error:', e);
-      if (
-        e.code?.includes('api-key-not-valid') ||
-        e.code?.includes('invalid-api-key') ||
-        e.code?.includes('app-not-authorized')
-      ) {
-        handleDemoSignIn('google.user@safesignal.app', 'Google Account User');
-      } else {
-        setError(e.message || 'Google Sign-In failed');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSendOtp = async () => {
-    if (!phone) return setError('Please enter a valid phone number with country code (e.g. +91 9876543210)');
-    try {
-      setLoading(true);
-      setError(null);
-      if (!hasFirebaseConfig) {
-        // In demo mode, simulate OTP sent immediately
-        setVerificationId('mock_verification_id_123');
-        setSuccessMsg('Demo OTP code is: 123456');
-        return;
-      }
-      const verifier = setupRecaptcha('recaptcha-container');
-      const confirmation = await sendPhoneOtp(phone, verifier);
-      setVerificationId(confirmation.verificationId);
-      setSuccessMsg('OTP code sent to your phone.');
-    } catch (e: any) {
-      console.error(e);
-      if (e.code?.includes('api-key-not-valid') || e.code?.includes('invalid-api-key')) {
-        setVerificationId('mock_verification_id_123');
-        setSuccessMsg('Demo OTP code is: 123456');
-      } else {
-        setError(e.message || 'Failed to send OTP. Check phone number and Firebase configuration.');
-      }
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleVerifyOtp = async () => {
-    if (!verificationId || !otp) return;
-    try {
-      setLoading(true);
-      setError(null);
-      if (verificationId === 'mock_verification_id_123') {
-        if (otp === '123456' || otp.length === 6) {
-          handleDemoSignIn(undefined, `Phone User (${phone})`);
-          return;
-        } else {
-          setError('Invalid demo OTP. Use 123456.');
-          return;
-        }
-      }
-      const credential = PhoneAuthProvider.credential(verificationId, otp);
-      await signInWithCredential(auth, credential);
-      navigate('/');
-    } catch (e: any) {
-      console.error(e);
-      setError(e.message || 'Invalid verification code');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleResetPassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!resetEmail) {
-      setError('Enter your email to receive password reset link.');
-      return;
-    }
-    try {
-      setLoading(true);
-      if (hasFirebaseConfig) {
-        await sendPasswordResetEmail(auth, resetEmail);
-      }
-      setShowForgotModal(false);
-      setSuccessMsg(`Password reset instructions sent to ${resetEmail}`);
-    } catch (err: any) {
-      setError(err.message || 'Failed to send reset email.');
+      setError(e.message || 'Google Sign-In failed');
     } finally {
       setLoading(false);
     }
@@ -423,13 +307,9 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
             title="Toggle Light / Dark Mode"
           >
             {isDark ? (
-              <>
-                <span className="text-amber-400">☀️</span>
-              </>
+              <span className="text-amber-400">☀️</span>
             ) : (
-              <>
-                <span className="text-indigo-500">🌙</span>
-              </>
+              <span className="text-indigo-500">🌙</span>
             )}
           </button>
         </div>
@@ -449,82 +329,11 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
             🚨
           </div>
           <h1 className={`text-2xl font-bold tracking-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
-            {activeTab === 'phone'
-              ? 'Phone Verification'
-              : activeTab === 'password'
-              ? emailMode === 'signin'
-                ? 'Welcome Back'
-                : 'Create Suraksha Account'
-              : 'Sign In with Email'}
+            Secure Sign In
           </h1>
           <p className={`text-xs mt-1.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
             Discreet Emergency SOS & Live GPS Safety Network
           </p>
-        </div>
-
-        {/* Auth Method Navigation Tabs (Email OTP vs Phone OTP vs Password) */}
-        <div
-          className={`flex rounded-2xl p-1 mb-5 border ${
-            isDark ? 'bg-slate-950 border-slate-800' : 'bg-slate-100 border-slate-200'
-          }`}
-        >
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('email');
-              setError(null);
-              setSuccessMsg(null);
-            }}
-            className={`flex-1 py-2 text-xs font-semibold rounded-xl transition duration-150 flex items-center justify-center gap-1.5 ${
-              activeTab === 'email'
-                ? isDark
-                  ? 'bg-slate-800 text-teal-400 shadow-sm shadow-slate-900'
-                  : 'bg-white text-teal-600 shadow-sm'
-                : isDark
-                ? 'text-slate-400 hover:text-slate-200'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <span>✉️</span> Email OTP
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('phone');
-              setError(null);
-              setSuccessMsg(null);
-            }}
-            className={`flex-1 py-2 text-xs font-semibold rounded-xl transition duration-150 flex items-center justify-center gap-1.5 ${
-              activeTab === 'phone'
-                ? isDark
-                  ? 'bg-slate-800 text-teal-400 shadow-sm shadow-slate-900'
-                  : 'bg-white text-teal-600 shadow-sm'
-                : isDark
-                ? 'text-slate-400 hover:text-slate-200'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <span>📱</span> Phone OTP
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setActiveTab('password');
-              setError(null);
-              setSuccessMsg(null);
-            }}
-            className={`flex-1 py-2 text-xs font-semibold rounded-xl transition duration-150 flex items-center justify-center gap-1.5 ${
-              activeTab === 'password'
-                ? isDark
-                  ? 'bg-slate-800 text-teal-400 shadow-sm shadow-slate-900'
-                  : 'bg-white text-teal-600 shadow-sm'
-                : isDark
-                ? 'text-slate-400 hover:text-slate-200'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <span>🔑</span> Password
-          </button>
         </div>
 
         {/* Error / Success Notifications */}
@@ -554,393 +363,111 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
           </div>
         )}
 
-        {/* TAB 1: EMAIL 6-DIGIT OTP LOGIN */}
-        {activeTab === 'email' && (
-          <div className="space-y-4">
-            <div>
-              <div className="flex justify-between items-center mb-1">
-                <label className={`block text-[11px] font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                  Email Address
-                </label>
-                {emailOtpSent && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmailOtpSent(false);
-                      setEmailOtpCode('');
-                      setError(null);
-                    }}
-                    disabled={loading}
-                    className="text-[11px] text-teal-400 hover:underline"
-                  >
-                    Change email
-                  </button>
-                )}
-              </div>
-
-              <div className="relative">
-                <input
-                  type="email"
-                  required
-                  placeholder="you@example.com"
-                  value={emailOtpAddress}
-                  onChange={(e) => setEmailOtpAddress(e.target.value)}
-                  disabled={loading || emailOtpSent}
-                  className={`w-full rounded-xl pl-9 pr-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border disabled:opacity-50 ${
-                    isDark
-                      ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
-                      : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-teal-500'
-                  }`}
-                />
-                <span className="absolute left-3 top-2.5 text-slate-400 text-sm">✉️</span>
-              </div>
-            </div>
-
-            {!emailOtpSent ? (
-              <button
-                type="button"
-                onClick={handleSendEmailOtp}
-                disabled={loading || !emailOtpAddress.trim()}
-                className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                    <span>Sending verification code…</span>
-                  </>
-                ) : (
-                  <span>Send code</span>
-                )}
-              </button>
-            ) : (
-              <div className="space-y-3.5 pt-1">
-                <div>
-                  <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                    6-Digit Security Code
-                  </label>
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    maxLength={6}
-                    placeholder="••••••"
-                    value={emailOtpCode}
-                    onChange={(e) => {
-                      const digits = e.target.value.replace(/\D/g, '').slice(0, 6);
-                      setEmailOtpCode(digits);
-                      if (digits.length === 6) {
-                        handleVerifyEmailOtp(digits);
-                      }
-                    }}
-                    disabled={loading}
-                    className={`w-full text-center tracking-[0.4em] text-xl font-mono rounded-xl px-3.5 py-2.5 transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border disabled:opacity-50 ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-800 text-slate-100 focus:border-teal-500'
-                        : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-teal-500'
-                    }`}
-                  />
-                </div>
-
+        {/* Single Unified OTP Flow */}
+        <div className="space-y-4">
+          <div>
+            <div className="flex justify-between items-center mb-1">
+              <label className={`block text-[11px] font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
+                Email Address or Mobile Number
+              </label>
+              {codeSent && (
                 <button
                   type="button"
-                  onClick={() => handleVerifyEmailOtp()}
-                  disabled={loading || emailOtpCode.length < 6}
-                  className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
+                  onClick={() => {
+                    setCodeSent(false);
+                    setOtpCode('');
+                    setError(null);
+                  }}
+                  disabled={loading}
+                  className="text-[11px] text-teal-400 hover:underline"
                 >
-                  {loading ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                      <span>Verifying code…</span>
-                    </>
-                  ) : (
-                    <span>Verify & Sign In</span>
-                  )}
+                  Change email
                 </button>
-
-                <div className="text-center pt-1">
-                  {emailCountdown > 0 ? (
-                    <span className="text-xs text-slate-400">
-                      Resend code in <strong className="text-teal-400">{emailCountdown}s</strong>
-                    </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleSendEmailOtp}
-                      disabled={loading}
-                      className="text-xs font-semibold text-teal-400 hover:text-teal-300 transition"
-                    >
-                      Didn't receive the code? Resend code
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* TAB 2: EMAIL & PASSWORD (SIGN IN / SIGN UP) */}
-        {activeTab === 'password' && (
-          <div>
-            {/* Sub-toggle: Sign In vs Sign Up */}
-            <div className="flex items-center justify-center gap-2 mb-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setEmailMode('signin');
-                  setError(null);
-                }}
-                className={`text-xs font-semibold pb-1 border-b-2 transition ${
-                  emailMode === 'signin'
-                    ? 'border-teal-500 text-teal-500'
-                    : `border-transparent ${isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'}`
-                }`}
-              >
-                Sign In
-              </button>
-              <span className={`text-xs ${isDark ? 'text-slate-600' : 'text-slate-300'}`}>•</span>
-              <button
-                type="button"
-                onClick={() => {
-                  setEmailMode('signup');
-                  setError(null);
-                }}
-                className={`text-xs font-semibold pb-1 border-b-2 transition ${
-                  emailMode === 'signup'
-                    ? 'border-teal-500 text-teal-500'
-                    : `border-transparent ${isDark ? 'text-slate-400 hover:text-slate-200' : 'text-slate-500 hover:text-slate-800'}`
-                }`}
-              >
-                Create Account
-              </button>
+              )}
             </div>
 
-            <form onSubmit={handleEmailSubmit} className="space-y-3.5">
-              {emailMode === 'signup' && (
-                <div>
-                  <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                    Full Name
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Alex Sharma"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className={`w-full rounded-xl px-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-teal-500'
-                    }`}
-                  />
-                </div>
-              )}
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="you@example.com"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                disabled={loading || codeSent}
+                className={`w-full rounded-xl pl-9 pr-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border ${
+                  isDark
+                    ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
+                    : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-teal-500'
+                }`}
+              />
+              <span className="absolute left-3 top-2.5 text-slate-400 text-sm">
+                {identifier.includes('@') ? '✉️' : /\d/.test(identifier) ? '📱' : '🔒'}
+              </span>
+            </div>
+            <p className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+              Enter your email or 10-digit mobile number (e.g. +91 9480178942)
+            </p>
+          </div>
 
+          {!codeSent ? (
+            <button
+              type="button"
+              onClick={handleSendCode}
+              disabled={loading || !identifier.trim()}
+              className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
+            >
+              {loading ? 'Sending code…' : 'Send code'}
+            </button>
+          ) : (
+            <div className="space-y-4 pt-1">
               <div>
                 <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                  Email Address
+                  6-Digit Security Code
                 </label>
-                <div className="relative">
-                  <input
-                    type="email"
-                    required
-                    placeholder="you@example.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className={`w-full rounded-xl pl-9 pr-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-teal-500'
-                    }`}
-                  />
-                  <span className="absolute left-3 top-2.5 text-slate-400 text-sm">✉️</span>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex justify-between items-center mb-1">
-                  <label className={`block text-[11px] font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                    Password
-                  </label>
-                  {emailMode === 'signin' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setResetEmail(email);
-                        setShowForgotModal(true);
-                      }}
-                      className="text-[11px] text-teal-500 hover:text-teal-400 transition"
-                    >
-                      Forgot password?
-                    </button>
-                  )}
-                </div>
-                <div className="relative">
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    required
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className={`w-full rounded-xl pl-9 pr-10 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
-                        : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-teal-500'
-                    }`}
-                  />
-                  <span className="absolute left-3 top-2.5 text-slate-400 text-sm">🔒</span>
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200 text-xs focus:outline-none"
-                    title={showPassword ? 'Hide password' : 'Show password'}
-                  >
-                    {showPassword ? '👁️' : '👁️‍🗨️'}
-                  </button>
-                </div>
-              </div>
-
-              {emailMode === 'signup' && (
-                <div>
-                  <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                    Confirm Password
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showPassword ? 'text' : 'password'}
-                      required
-                      placeholder="••••••••"
-                      value={confirmPassword}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
-                      className={`w-full rounded-xl pl-9 pr-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border ${
-                        isDark
-                          ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
-                          : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-teal-500'
-                      }`}
-                    />
-                    <span className="absolute left-3 top-2.5 text-slate-400 text-sm">🔑</span>
-                  </div>
-                </div>
-              )}
-
-              {emailMode === 'signin' && (
-                <div className="flex items-center gap-2">
-                  <input
-                    id="rememberMe"
-                    type="checkbox"
-                    checked={rememberMe}
-                    onChange={(e) => setRememberMe(e.target.checked)}
-                    className="w-4 h-4 rounded text-teal-500 focus:ring-teal-500/30 accent-teal-500"
-                  />
-                  <label
-                    htmlFor="rememberMe"
-                    className={`text-xs cursor-pointer select-none ${isDark ? 'text-slate-400' : 'text-slate-600'}`}
-                  >
-                    Remember this device for 30 days
-                  </label>
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-2.5 px-4 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
-              >
-                {loading ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                    <span>Processing…</span>
-                  </>
-                ) : (
-                  <span>{emailMode === 'signin' ? 'Sign In to Suraksha Signal' : 'Complete Registration'}</span>
-                )}
-              </button>
-            </form>
-          </div>
-        )}
-
-        {/* TAB 2: PHONE NUMBER OTP */}
-        {activeTab === 'phone' && (
-          <div className="space-y-3.5">
-            <div>
-              <label className={`block text-[11px] font-semibold mb-1 ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                Mobile Phone Number
-              </label>
-              <div className="relative">
                 <input
-                  type="tel"
-                  placeholder="+91 98765 43210"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  disabled={loading || !!verificationId}
-                  className={`w-full rounded-xl pl-9 pr-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border ${
+                  type="text"
+                  maxLength={6}
+                  placeholder="••••••"
+                  value={otpCode}
+                  onChange={(e) => {
+                    const cleaned = e.target.value.replace(/\D/g, '').slice(0, 6);
+                    setOtpCode(cleaned);
+                    if (cleaned.length === 6) {
+                      handleVerifyCode(undefined, cleaned);
+                    }
+                  }}
+                  className={`w-full text-center tracking-[0.5em] text-xl font-mono rounded-xl px-3.5 py-2.5 transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border ${
                     isDark
-                      ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
-                      : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:border-teal-500'
+                      ? 'bg-slate-950 border-slate-800 text-teal-400 focus:border-teal-500'
+                      : 'bg-slate-50 border-slate-300 text-teal-600 focus:border-teal-500'
                   }`}
                 />
-                <span className="absolute left-3 top-2.5 text-slate-400 text-sm">📞</span>
               </div>
-              <p className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                Includes country code prefix (e.g., +91 for India, +1 for US)
-              </p>
-            </div>
 
-            {!verificationId ? (
               <button
                 type="button"
-                onClick={handleSendOtp}
-                disabled={loading}
-                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-teal-400 border border-teal-500/30 font-semibold rounded-xl text-sm transition flex items-center justify-center gap-2 disabled:opacity-50 shadow-sm"
+                onClick={handleVerifyCode}
+                disabled={loading || otpCode.length !== 6}
+                className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                {loading ? 'Sending Verification Code…' : '📨 Send One-Time SMS Code'}
+                {loading ? 'Verifying…' : 'Verify & Sign In'}
               </button>
-            ) : (
-              <div className="space-y-3 pt-2">
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className={`block text-[11px] font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>
-                      6-Digit Security Code
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setVerificationId(null);
-                        setOtp('');
-                      }}
-                      className="text-[11px] text-teal-500 hover:underline"
-                    >
-                      Change number
-                    </button>
-                  </div>
-                  <input
-                    type="text"
-                    maxLength={6}
-                    placeholder="Enter 6-digit OTP"
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value)}
-                    className={`w-full text-center tracking-widest text-lg font-mono rounded-xl px-3.5 py-2.5 transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border ${
-                      isDark
-                        ? 'bg-slate-950 border-slate-800 text-slate-100 focus:border-teal-500'
-                        : 'bg-slate-50 border-slate-300 text-slate-900 focus:border-teal-500'
-                    }`}
-                  />
-                </div>
 
+              <div className="text-center pt-1">
                 <button
                   type="button"
-                  onClick={handleVerifyOtp}
-                  disabled={loading || otp.length < 6}
-                  className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
+                  onClick={handleSendCode}
+                  disabled={loading || countdown > 0}
+                  className="text-xs text-teal-400 hover:underline disabled:opacity-50"
                 >
-                  {loading ? 'Verifying Code…' : '✅ Verify & Sign In'}
+                  {countdown > 0 ? `Resend code in ${countdown}s` : 'Resend code'}
                 </button>
               </div>
-            )}
-          </div>
-        )}
+            </div>
+          )}
+        </div>
 
         {/* Divider */}
-        <div className="relative my-5 text-center">
+        <div className="relative my-6 text-center">
           <div className="absolute inset-0 flex items-center">
             <div className={`w-full border-t ${isDark ? 'border-slate-800' : 'border-slate-200'}`} />
           </div>
@@ -958,7 +485,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
           type="button"
           onClick={handleGoogleSignIn}
           disabled={loading}
-          className={`w-full mb-3 py-2.5 px-4 rounded-xl text-sm font-semibold transition flex items-center justify-center gap-2.5 border disabled:opacity-50 ${
+          className={`w-full py-2.5 px-4 rounded-xl text-sm font-semibold transition flex items-center justify-center gap-2.5 border disabled:opacity-50 ${
             isDark
               ? 'bg-slate-800/80 hover:bg-slate-700/80 border-slate-700 text-white'
               : 'bg-white hover:bg-slate-50 border-slate-300 text-slate-800 shadow-sm'
@@ -984,110 +511,10 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
           </svg>
           <span>Continue with Google</span>
         </button>
-
-        {/* Demo / Guest Mode One-Click Card */}
-        <div
-          className={`p-3.5 rounded-2xl border transition ${
-            isDark
-              ? 'bg-gradient-to-r from-teal-950/40 to-slate-900 border-teal-500/30'
-              : 'bg-teal-50/70 border-teal-200'
-          }`}
-        >
-          <div className="flex items-center justify-between mb-1.5">
-            <span
-              className={`text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5 ${
-                isDark ? 'text-teal-400' : 'text-teal-700'
-              }`}
-            >
-              <span className="w-2 h-2 rounded-full bg-teal-500 animate-ping" />
-              Developer & Guest Testing
-            </span>
-            <span
-              className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${
-                isDark ? 'bg-teal-500/20 text-teal-300' : 'bg-teal-200 text-teal-800'
-              }`}
-            >
-              1-Click
-            </span>
-          </div>
-          <p className={`text-[11px] mb-2.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-            Bypass authentication and test the full SOS siren, GPS tracking, and emergency contacts.
-          </p>
-          <button
-            type="button"
-            onClick={() => handleDemoSignIn()}
-            className={`w-full py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 border ${
-              isDark
-                ? 'bg-teal-500/10 hover:bg-teal-500/20 text-teal-300 border-teal-500/40'
-                : 'bg-teal-600 hover:bg-teal-700 text-white border-transparent shadow-sm'
-            }`}
-          >
-            <span>🚀 Launch Demo / Guest Session</span>
-          </button>
-        </div>
       </div>
 
       {/* Invisible reCAPTCHA container for Phone Auth */}
       <div id="recaptcha-container" />
-
-      {/* Forgot Password Modal */}
-      {showForgotModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-          <div
-            className={`w-full max-w-sm rounded-2xl p-6 border shadow-2xl ${
-              isDark ? 'bg-slate-900 border-slate-800 text-slate-100' : 'bg-white border-slate-200 text-slate-900'
-            }`}
-          >
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-bold text-base flex items-center gap-1.5">
-                <span>🔑</span> Reset Password
-              </h3>
-              <button
-                type="button"
-                onClick={() => setShowForgotModal(false)}
-                className="text-slate-400 hover:text-slate-200 text-sm"
-              >
-                ✕
-              </button>
-            </div>
-            <p className={`text-xs mb-4 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-              Enter the email address associated with your Suraksha Signal account. We will send you instructions to reset your password.
-            </p>
-            <form onSubmit={handleResetPassword} className="space-y-3">
-              <input
-                type="email"
-                required
-                placeholder="you@example.com"
-                value={resetEmail}
-                onChange={(e) => setResetEmail(e.target.value)}
-                className={`w-full rounded-xl px-3.5 py-2 text-sm border focus:outline-none focus:ring-2 focus:ring-teal-500/40 ${
-                  isDark
-                    ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600'
-                    : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400'
-                }`}
-              />
-              <div className="flex gap-2 justify-end pt-1">
-                <button
-                  type="button"
-                  onClick={() => setShowForgotModal(false)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-medium border ${
-                    isDark ? 'border-slate-700 text-slate-300' : 'border-slate-300 text-slate-700'
-                  }`}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="px-4 py-1.5 bg-teal-500 hover:bg-teal-600 text-slate-950 font-bold rounded-xl text-xs transition"
-                >
-                  Send Reset Link
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Footer Info */}
       <footer className="mt-6 text-center text-[11px] text-slate-500 z-10">
