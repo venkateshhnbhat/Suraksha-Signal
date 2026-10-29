@@ -36,7 +36,7 @@ describe('AuthPage Email OTP Flow', () => {
     });
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <AuthPage />
       </MemoryRouter>
     );
@@ -77,7 +77,7 @@ describe('AuthPage Email OTP Flow', () => {
     const mockSignInWithCustomToken = vi.mocked(firebaseAuth.signInWithCustomToken);
 
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <AuthPage />
       </MemoryRouter>
     );

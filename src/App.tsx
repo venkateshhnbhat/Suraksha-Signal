@@ -50,8 +50,8 @@ const App: React.FC = () => {
               session.user.user_metadata?.name ||
               session.user.email?.split('@')[0] ||
               'Google User',
-            email: session.user.email,
-            phoneNumber: session.user.phone || undefined,
+            email: session.user.email ?? null,
+            phoneNumber: session.user.phone ?? null,
             isDemo: false
           });
           setChecking(false);
@@ -68,8 +68,8 @@ const App: React.FC = () => {
               session.user.user_metadata?.name ||
               session.user.email?.split('@')[0] ||
               'Google User',
-            email: session.user.email,
-            phoneNumber: session.user.phone || undefined,
+            email: session.user.email ?? null,
+            phoneNumber: session.user.phone ?? null,
             isDemo: false
           });
           setChecking(false);
@@ -169,7 +169,7 @@ const App: React.FC = () => {
         </aside>
       )}
 
-      <Router>
+      <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route
             path="/auth"
