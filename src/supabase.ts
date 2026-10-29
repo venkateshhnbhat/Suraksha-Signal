@@ -33,3 +33,4 @@ export const signInWithGoogleSupabase = async () => {
 
   return data;
 };
+
