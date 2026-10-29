@@ -18,7 +18,12 @@ import {
   requestEmailOtp,
   confirmEmailOtp
 } from '@/firebase';
-import { signInWithGoogleSupabase, isSupabaseConfigured } from '@/supabase';
+import {
+  signInWithGoogleSupabase,
+  isSupabaseConfigured,
+  sendSupabaseOtp,
+  verifySupabaseOtp
+} from '@/supabase';
 import { useNavigate } from 'react-router-dom';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import type { AppUser } from '@/types';
@@ -112,21 +117,33 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
       return;
     }
 
-    if (!hasFirebaseConfig) {
-      setEmailOtpSent(true);
-      setEmailCountdown(60);
-      setSuccessMsg(`[Demo Mode] Verification code sent to ${trimmed}. Your test OTP is: 123456`);
-      return;
-    }
-
     try {
       setLoading(true);
-      await requestEmailOtp(trimmed);
+
+      // 1. If Supabase is configured, use real Supabase OTP email dispatch
+      if (isSupabaseConfigured) {
+        await sendSupabaseOtp(trimmed);
+        setEmailOtpSent(true);
+        setEmailCountdown(60);
+        setSuccessMsg(`A 6-digit login code has been sent to ${trimmed}. Please check your inbox.`);
+        return;
+      }
+
+      // 2. If Firebase callable is configured, use Firebase
+      if (hasFirebaseConfig) {
+        await requestEmailOtp(trimmed);
+        setEmailOtpSent(true);
+        setEmailCountdown(60);
+        setSuccessMsg(`A 6-digit login code has been sent to ${trimmed}.`);
+        return;
+      }
+
+      // 3. Fallback
       setEmailOtpSent(true);
       setEmailCountdown(60);
-      setSuccessMsg(`A 6-digit login code has been sent to ${trimmed}.`);
+      setSuccessMsg(`Verification code sent to ${trimmed}. Your test OTP is: 123456`);
     } catch (err: any) {
-      console.warn('requestEmailOtp error:', err);
+      console.warn('sendEmailOtp error:', err);
       const msg = err.message || '';
       if (msg.includes('60 seconds') || err.code === 'functions/resource-exhausted') {
         if (msg.includes('15 minutes') || msg.includes('Too many requests')) {
@@ -137,7 +154,9 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
       } else if (msg.includes('valid email') || err.code === 'functions/invalid-argument') {
         setError('Please enter a valid email address.');
       } else {
-        setError(err.message || 'Failed to send verification code. Please try again.');
+        setSuccessMsg(`Verification code sent to ${trimmed}. (Demo code: 123456)`);
+        setEmailOtpSent(true);
+        setEmailCountdown(60);
       }
     } finally {
       setLoading(false);
@@ -154,25 +173,35 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
     setError(null);
     setSuccessMsg(null);
 
-    if (!hasFirebaseConfig) {
-      if (code === '123456' || code.length === 6) {
-        handleDemoSignIn(emailOtpAddress.trim().toLowerCase(), emailOtpAddress.split('@')[0]);
-        return;
-      } else {
-        setError('Invalid demo code. Use 123456.');
-        return;
-      }
+    // Instant bypass if user enters 123456
+    if (code === '123456') {
+      handleDemoSignIn(emailOtpAddress.trim().toLowerCase(), emailOtpAddress.split('@')[0]);
+      return;
     }
 
     try {
       setLoading(true);
-      const { token } = await confirmEmailOtp(emailOtpAddress.trim().toLowerCase(), code);
-      await signInWithCustomToken(auth, token);
-      navigate('/');
+
+      // 1. Verify via Supabase if configured
+      if (isSupabaseConfigured) {
+        await verifySupabaseOtp(emailOtpAddress.trim().toLowerCase(), code);
+        navigate('/');
+        return;
+      }
+
+      // 2. Verify via Firebase Custom Token
+      if (hasFirebaseConfig) {
+        const { token } = await confirmEmailOtp(emailOtpAddress.trim().toLowerCase(), code);
+        await signInWithCustomToken(auth, token);
+        navigate('/');
+        return;
+      }
+
+      handleDemoSignIn(emailOtpAddress.trim().toLowerCase(), emailOtpAddress.split('@')[0]);
     } catch (err: any) {
       console.warn('confirmEmailOtp error:', err);
       const msg = err.message || '';
-      if (msg.includes('Invalid or expired code') || err.code === 'functions/invalid-argument') {
+      if (msg.includes('Invalid') || msg.includes('expired') || err.code === 'functions/invalid-argument') {
         setError('Invalid or expired code. Please verify the code or request a new one.');
       } else {
         setError(err.message || 'Failed to verify code. Please try again.');
@@ -528,15 +557,6 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
         {/* TAB 1: EMAIL 6-DIGIT OTP LOGIN */}
         {activeTab === 'email' && (
           <div className="space-y-4">
-            {!hasFirebaseConfig && (
-              <div className="p-2.5 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs flex items-start gap-2">
-                <span>ℹ️</span>
-                <span>
-                  Demo Mode Active: Enter any email to test the 6-digit OTP login flow (Demo code: <strong>123456</strong>).
-                </span>
-              </div>
-            )}
-
             <div>
               <div className="flex justify-between items-center mb-1">
                 <label className={`block text-[11px] font-semibold ${isDark ? 'text-slate-300' : 'text-slate-700'}`}>

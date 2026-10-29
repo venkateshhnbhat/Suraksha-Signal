@@ -36,3 +36,41 @@ export const signInWithGoogleSupabase = async () => {
   return data;
 };
 
+/**
+ * Sends a real 6-digit OTP to the user's email via Supabase Auth.
+ */
+export const sendSupabaseOtp = async (email: string) => {
+  const { data, error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      emailRedirectTo: typeof window !== 'undefined' ? window.location.origin : undefined,
+      shouldCreateUser: true
+    }
+  });
+  if (error) throw error;
+  return data;
+};
+
+/**
+ * Verifies the 6-digit OTP sent to the user's email via Supabase Auth.
+ */
+export const verifySupabaseOtp = async (email: string, token: string) => {
+  const { data, error } = await supabase.auth.verifyOtp({
+    email,
+    token,
+    type: 'email'
+  });
+  if (error) {
+    const retry = await supabase.auth.verifyOtp({
+      email,
+      token,
+      type: 'signup'
+    });
+    if (retry.error) {
+      throw error;
+    }
+    return retry.data;
+  }
+  return data;
+};
+

@@ -6,6 +6,13 @@ import AuthPage from '../pages/AuthPage';
 import * as firebaseModule from '../firebase';
 import * as firebaseAuth from 'firebase/auth';
 
+vi.mock('../supabase', () => ({
+  isSupabaseConfigured: false,
+  signInWithGoogleSupabase: vi.fn(),
+  sendSupabaseOtp: vi.fn(),
+  verifySupabaseOtp: vi.fn()
+}));
+
 vi.mock('../firebase', async (importOriginal) => {
   const actual = await importOriginal<typeof firebaseModule>();
   return {

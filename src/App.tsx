@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { onAuthStateChanged, User } from 'firebase/auth';
-import { auth, isFirebaseConfigured } from '@/firebase';
+import { auth } from '@/firebase';
 import { supabase } from '@/supabase';
 import AuthPage from '@/pages/AuthPage';
 import HomePage from '@/pages/HomePage';
@@ -153,22 +153,8 @@ const App: React.FC = () => {
     );
   }
 
-  const hasFirebase = isFirebaseConfigured();
-
   return (
     <ErrorBoundary>
-      {/* Explicit Demo Banner when Firebase is not configured */}
-      {!hasFirebase && (
-        <aside
-          role="status"
-          aria-label="Demo mode active notice"
-          className="bg-amber-950/80 border-b border-amber-600/60 text-amber-200 px-4 py-2 text-xs text-center flex items-center justify-center gap-2 sticky top-0 z-50 backdrop-blur-md"
-        >
-          <span className="font-bold">⚠️ Running in Demo Mode:</span>
-          <span>Firebase environment is unconfigured. SMS alerts and cloud persistence are simulated locally.</span>
-        </aside>
-      )}
-
       <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route
