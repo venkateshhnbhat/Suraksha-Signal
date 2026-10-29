@@ -112,7 +112,9 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
     }
 
     if (!hasFirebaseConfig) {
-      setError('Email OTP sign-in requires Firebase configuration. Please use Demo mode.');
+      setEmailOtpSent(true);
+      setEmailCountdown(60);
+      setSuccessMsg(`[Demo Mode] Verification code sent to ${trimmed}. Your test OTP is: 123456`);
       return;
     }
 
@@ -150,6 +152,16 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
 
     setError(null);
     setSuccessMsg(null);
+
+    if (!hasFirebaseConfig) {
+      if (code === '123456' || code.length === 6) {
+        handleDemoSignIn(emailOtpAddress.trim().toLowerCase(), emailOtpAddress.split('@')[0]);
+        return;
+      } else {
+        setError('Invalid demo code. Use 123456.');
+        return;
+      }
+    }
 
     try {
       setLoading(true);
@@ -508,10 +520,10 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
         {activeTab === 'email' && (
           <div className="space-y-4">
             {!hasFirebaseConfig && (
-              <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-300 text-xs flex items-start gap-2">
+              <div className="p-2.5 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-300 text-xs flex items-start gap-2">
                 <span>ℹ️</span>
                 <span>
-                  Email login requires Firebase Cloud Functions configuration. In demo mode, please use the 1-Click Demo Session below.
+                  Demo Mode Active: Enter any email to test the 6-digit OTP login flow (Demo code: <strong>123456</strong>).
                 </span>
               </div>
             )}
@@ -529,7 +541,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
                       setEmailOtpCode('');
                       setError(null);
                     }}
-                    disabled={!hasFirebaseConfig || loading}
+                    disabled={loading}
                     className="text-[11px] text-teal-400 hover:underline"
                   >
                     Change email
@@ -544,7 +556,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
                   placeholder="you@example.com"
                   value={emailOtpAddress}
                   onChange={(e) => setEmailOtpAddress(e.target.value)}
-                  disabled={!hasFirebaseConfig || loading || emailOtpSent}
+                  disabled={loading || emailOtpSent}
                   className={`w-full rounded-xl pl-9 pr-3.5 py-2.5 text-sm transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border disabled:opacity-50 ${
                     isDark
                       ? 'bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-600 focus:border-teal-500'
@@ -559,7 +571,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
               <button
                 type="button"
                 onClick={handleSendEmailOtp}
-                disabled={!hasFirebaseConfig || loading || !emailOtpAddress.trim()}
+                disabled={loading || !emailOtpAddress.trim()}
                 className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {loading ? (
@@ -591,7 +603,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
                         handleVerifyEmailOtp(digits);
                       }
                     }}
-                    disabled={!hasFirebaseConfig || loading}
+                    disabled={loading}
                     className={`w-full text-center tracking-[0.4em] text-xl font-mono rounded-xl px-3.5 py-2.5 transition focus:outline-none focus:ring-2 focus:ring-teal-500/40 border disabled:opacity-50 ${
                       isDark
                         ? 'bg-slate-950 border-slate-800 text-slate-100 focus:border-teal-500'
@@ -603,7 +615,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
                 <button
                   type="button"
                   onClick={() => handleVerifyEmailOtp()}
-                  disabled={!hasFirebaseConfig || loading || emailOtpCode.length < 6}
+                  disabled={loading || emailOtpCode.length < 6}
                   className="w-full py-2.5 bg-gradient-to-r from-teal-500 to-emerald-500 hover:from-teal-600 hover:to-emerald-600 text-slate-950 font-bold rounded-xl text-sm transition shadow-lg shadow-teal-500/25 flex items-center justify-center gap-2 disabled:opacity-50"
                 >
                   {loading ? (
@@ -625,7 +637,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
                     <button
                       type="button"
                       onClick={handleSendEmailOtp}
-                      disabled={loading || !hasFirebaseConfig}
+                      disabled={loading}
                       className="text-xs font-semibold text-teal-400 hover:text-teal-300 transition"
                     >
                       Didn't receive the code? Resend code
