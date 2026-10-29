@@ -14,112 +14,160 @@ const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
 const MAX_TRIGGERS_PER_WINDOW = 3;
 
 /**
- * Callable: triggerSOS({ sessionId, contacts })
- * - Requires authenticated caller
- * - Ignores client-supplied contacts; queries caller's confirmed contacts from Firestore
- * - Rate limits caller to max 3 triggers per minute
- * - Sends emergency SMS with user's name, Google Maps link, and alert ID
- * - Updates alert document with per-contact delivery results and returns summary
+ * Core handler: handleTriggerSOS
  */
-export const triggerSOS = onCall(
-  { cors: true },
-  async (request) => {
-    if (!request.auth) {
-      throw new HttpsError('unauthenticated', 'User must be authenticated to trigger SOS.');
+export async function handleTriggerSOS(
+  data: any,
+  authContext: { uid: string; token?: any } | null | undefined,
+  dbInstance = db,
+  smsProvider = getSMSProvider(),
+  authInstance = auth
+) {
+  if (!authContext?.uid) {
+    throw new HttpsError('unauthenticated', 'User must be authenticated to trigger SOS.');
+  }
+
+  const uid = authContext.uid;
+  const { sessionId } = (data || {}) as { sessionId?: string };
+
+  if (!sessionId || typeof sessionId !== 'string' || !sessionId.trim()) {
+    throw new HttpsError('invalid-argument', 'sessionId is required.');
+  }
+
+  const cleanSessionId = sessionId.trim();
+  const alertRef = dbInstance.collection('alerts').doc(cleanSessionId);
+  const alertSnap = await alertRef.get();
+
+  if (!alertSnap.exists) {
+    throw new HttpsError('not-found', 'Emergency incident record not found. Persist the incident before triggering.');
+  }
+
+  const alertData = alertSnap.data() || {};
+  if (alertData.ownerUid && alertData.ownerUid !== uid) {
+    throw new HttpsError('permission-denied', 'You cannot trigger an alert owned by another user.');
+  }
+
+  // Idempotency check: if this incident was already dispatched, return existing delivery summary without duplicate SMS
+  if (alertData.deliveryStatus === 'sent' || alertData.deliveryStatus === 'partial') {
+    return {
+      sent: alertData.summary?.sent ?? 0,
+      failed: alertData.summary?.failed ?? 0,
+      total: alertData.summary?.total ?? 0,
+      deliveryStatus: alertData.deliveryStatus,
+      idempotent: true
+    };
+  }
+
+  // Rate-limiting check: max 3 triggers per minute per user
+  const rateLimitRef = dbInstance.collection('users').doc(uid).collection('rateLimits').doc('triggerSOS');
+  const now = Date.now();
+  const rateLimitDoc = await rateLimitRef.get();
+  let timestamps: number[] = [];
+
+  if (rateLimitDoc.exists) {
+    const rData = rateLimitDoc.data();
+    if (Array.isArray(rData?.timestamps)) {
+      timestamps = rData.timestamps.filter((ts: number) => now - ts < RATE_LIMIT_WINDOW_MS);
     }
+  }
 
-    const uid = request.auth.uid;
-    const { sessionId } = request.data as { sessionId?: string; contacts?: any };
+  if (timestamps.length >= MAX_TRIGGERS_PER_WINDOW) {
+    throw new HttpsError(
+      'resource-exhausted',
+      'Rate limit exceeded: You can trigger SOS at most 3 times per minute. Please wait.'
+    );
+  }
 
-    if (!sessionId) {
-      throw new HttpsError('invalid-argument', 'sessionId is required.');
+  timestamps.push(now);
+  await rateLimitRef.set({ timestamps, lastTriggeredAt: Timestamp ? Timestamp.fromMillis(now) : now });
+
+  // Update alert status to 'sending' before starting downstream notification delivery
+  await alertRef.set(
+    {
+      deliveryStatus: 'sending',
+      status: 'active',
+      updatedAt: Timestamp ? Timestamp.fromMillis(now) : now
+    },
+    { merge: true }
+  );
+
+  // Fetch caller's details
+  let callerName = authContext.token?.name || 'A Suraksha Signal User';
+  try {
+    const userRecord = await authInstance.getUser(uid);
+    if (userRecord.displayName) {
+      callerName = userRecord.displayName;
     }
+  } catch {
+    // Fallback to token name
+  }
 
-    // 1. Rate-limiting check
-    const rateLimitRef = db.collection('users').doc(uid).collection('rateLimits').doc('triggerSOS');
-    const now = Date.now();
-    const rateLimitDoc = await rateLimitRef.get();
-    let timestamps: number[] = [];
+  // Fetch ONLY confirmed contacts from users/{uid}/contacts
+  const contactsSnap = await dbInstance
+    .collection('users')
+    .doc(uid)
+    .collection('contacts')
+    .where('confirmed', '==', true)
+    .get();
 
-    if (rateLimitDoc.exists) {
-      const data = rateLimitDoc.data();
-      if (Array.isArray(data?.timestamps)) {
-        timestamps = data.timestamps.filter((ts: number) => now - ts < RATE_LIMIT_WINDOW_MS);
-      }
-    }
+  const confirmedContacts = contactsSnap.docs.map((d: any) => ({
+    id: d.id,
+    name: d.data().name || 'Emergency Contact',
+    phone: d.data().phone
+  })).filter((c: any) => Boolean(c.phone));
 
-    if (timestamps.length >= MAX_TRIGGERS_PER_WINDOW) {
-      throw new HttpsError(
-        'resource-exhausted',
-        'Rate limit exceeded: You can trigger SOS at most 3 times per minute. Please wait.'
-      );
-    }
+  // Validate coordinates: latitude between -90 and 90, longitude between -180 and 180
+  let lat = typeof alertData.latitude === 'number' && !isNaN(alertData.latitude) ? alertData.latitude : null;
+  let lng = typeof alertData.longitude === 'number' && !isNaN(alertData.longitude) ? alertData.longitude : null;
+  if (lat !== null && (lat < -90 || lat > 90)) lat = null;
+  if (lng !== null && (lng < -180 || lng > 180)) lng = null;
 
-    timestamps.push(now);
-    await rateLimitRef.set({ timestamps, lastTriggeredAt: FieldValue.serverTimestamp() });
+  const mapsLink =
+    lat !== null && lng !== null
+      ? `https://maps.google.com/?q=${lat},${lng}`
+      : 'Location unavailable';
 
-    // 2. Fetch caller's details
-    let callerName = request.auth.token.name || 'A Suraksha Signal User';
+  const baseUrl = process.env.APP_BASE_URL || 'https://suraksha-signal.web.app';
+  const trackingLink = `${baseUrl}/track/${cleanSessionId}`;
+
+  // If no confirmed contacts exist, record failed delivery state honestly (never fabricate!)
+  if (confirmedContacts.length === 0) {
+    const summary = { sent: 0, failed: 0, total: 0 };
+    await alertRef.set(
+      {
+        deliveryStatus: 'failed',
+        status: 'active',
+        summary,
+        deliveryResults: [],
+        error: 'No confirmed emergency contacts configured.',
+        updatedAt: Timestamp ? Timestamp.fromMillis(now) : now
+      },
+      { merge: true }
+    );
+    return {
+      ...summary,
+      deliveryStatus: 'failed',
+      error: 'No confirmed emergency contacts configured.'
+    };
+  }
+
+  const smsBody = `🚨 EMERGENCY ALERT: ${callerName} has triggered an SOS! Location: ${mapsLink} Live Tracking: ${trackingLink} (Alert ID: ${cleanSessionId})`;
+
+  // Send SMS to all confirmed contacts
+  const deliveryResults: Array<{
+    contactId: string;
+    name: string;
+    phone: string;
+    status: 'sent' | 'failed';
+    messageId?: string;
+    error?: string;
+  }> = [];
+
+  let sentCount = 0;
+  let failedCount = 0;
+
+  for (const contact of confirmedContacts) {
     try {
-      const userRecord = await auth.getUser(uid);
-      if (userRecord.displayName) {
-        callerName = userRecord.displayName;
-      }
-    } catch {
-      // Use fallback name
-    }
-
-    // 3. Fetch ONLY confirmed contacts from users/{uid}/contacts
-    const contactsSnap = await db
-      .collection('users')
-      .doc(uid)
-      .collection('contacts')
-      .where('confirmed', '==', true)
-      .get();
-
-    const confirmedContacts = contactsSnap.docs.map((doc) => ({
-      id: doc.id,
-      name: doc.data().name || 'Emergency Contact',
-      phone: doc.data().phone
-    })).filter((c) => Boolean(c.phone));
-
-    // 4. Retrieve alert document to get location
-    const alertRef = db.collection('alerts').doc(sessionId);
-    const alertSnap = await alertRef.get();
-    let lat: number | null = null;
-    let lng: number | null = null;
-
-    if (alertSnap.exists) {
-      const alertData = alertSnap.data();
-      lat = alertData?.latitude ?? null;
-      lng = alertData?.longitude ?? null;
-    }
-
-    const mapsLink =
-      lat !== null && lng !== null
-        ? `https://maps.google.com/?q=${lat},${lng}`
-        : 'Location unavailable';
-
-    const baseUrl = process.env.APP_BASE_URL || 'https://suraksha-signal.web.app';
-    const trackingLink = `${baseUrl}/track/${sessionId}`;
-
-    const smsBody = `🚨 EMERGENCY ALERT: ${callerName} has triggered an SOS! Location: ${mapsLink} Live Tracking: ${trackingLink} (Alert ID: ${sessionId})`;
-
-    // 5. Send SMS to all confirmed contacts
-    const smsProvider = getSMSProvider();
-    const deliveryResults: Array<{
-      contactId: string;
-      name: string;
-      phone: string;
-      status: 'sent' | 'failed';
-      messageId?: string;
-      error?: string;
-    }> = [];
-
-    let sentCount = 0;
-    let failedCount = 0;
-
-    for (const contact of confirmedContacts) {
       const sendResult = await smsProvider.sendSMS({
         to: contact.phone,
         body: smsBody
@@ -144,26 +192,112 @@ export const triggerSOS = onCall(
           error: sendResult.error
         });
       }
+    } catch (err: any) {
+      failedCount++;
+      deliveryResults.push({
+        contactId: contact.id,
+        name: contact.name,
+        phone: contact.phone,
+        status: 'failed',
+        error: err?.message || 'SMS provider exception'
+      });
     }
+  }
 
-    const summary = {
-      sent: sentCount,
-      failed: failedCount,
-      total: confirmedContacts.length
-    };
+  const deliveryStatus = sentCount === confirmedContacts.length
+    ? 'sent'
+    : sentCount > 0
+    ? 'partial'
+    : 'failed';
 
-    // 6. Write per-contact delivery results to alert document
-    await alertRef.set(
-      {
-        deliveryResults,
-        summary,
-        status: 'active',
-        updatedAt: FieldValue.serverTimestamp()
-      },
-      { merge: true }
-    );
+  const summary = {
+    sent: sentCount,
+    failed: failedCount,
+    total: confirmedContacts.length
+  };
 
-    return summary;
+  await alertRef.set(
+    {
+      deliveryResults,
+      summary,
+      deliveryStatus,
+      status: 'active',
+      expiresAt: Timestamp ? Timestamp.fromMillis(now + 24 * 60 * 60 * 1000) : now + 24 * 60 * 60 * 1000,
+      updatedAt: Timestamp ? Timestamp.fromMillis(now) : now
+    },
+    { merge: true }
+  );
+
+  return {
+    ...summary,
+    deliveryStatus,
+    sessionId: cleanSessionId
+  };
+}
+
+/**
+ * Callable: triggerSOS({ sessionId })
+ */
+export const triggerSOS = onCall(
+  { cors: true },
+  async (request) => {
+    return handleTriggerSOS(request.data, request.auth);
+  }
+);
+
+/**
+ * Core handler: handleResolveSOS
+ */
+export async function handleResolveSOS(
+  data: any,
+  authContext: { uid: string } | null | undefined,
+  dbInstance = db
+) {
+  if (!authContext?.uid) {
+    throw new HttpsError('unauthenticated', 'User must be authenticated to resolve SOS.');
+  }
+
+  const uid = authContext.uid;
+  const { sessionId, reason } = (data || {}) as { sessionId?: string; reason?: string };
+
+  if (!sessionId || typeof sessionId !== 'string') {
+    throw new HttpsError('invalid-argument', 'sessionId is required.');
+  }
+
+  const alertRef = dbInstance.collection('alerts').doc(sessionId.trim());
+  const alertSnap = await alertRef.get();
+
+  if (!alertSnap.exists) {
+    throw new HttpsError('not-found', 'Alert not found.');
+  }
+
+  const alertData = alertSnap.data() || {};
+  if (alertData.ownerUid && alertData.ownerUid !== uid) {
+    throw new HttpsError('permission-denied', 'You cannot resolve an alert owned by another user.');
+  }
+
+  const now = Date.now();
+  await alertRef.set(
+    {
+      status: 'resolved',
+      resolvedAt: Timestamp ? Timestamp.fromMillis(now) : now,
+      resolvedBy: uid,
+      resolutionReason: typeof reason === 'string' && reason.trim() ? reason.trim() : 'Resolved by user',
+      updatedAt: Timestamp ? Timestamp.fromMillis(now) : now
+    },
+    { merge: true }
+  );
+
+  return { success: true, sessionId: sessionId.trim(), status: 'resolved' };
+}
+
+/**
+ * Callable: resolveSOS({ sessionId, reason })
+ */
+export const resolveSOS = onCall(
+  { cors: true },
+  async (request) => {
+    return handleResolveSOS(request.data, request.auth);
   }
 );
 

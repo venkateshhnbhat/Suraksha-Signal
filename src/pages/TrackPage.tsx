@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db, isFirebaseConfigured } from '@/firebase';
-import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -12,19 +12,46 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 });
 
+// Helper: recenter map when coordinates change
+const MapRecenter: React.FC<{ center: [number, number] }> = ({ center }) => {
+  const map = useMap();
+  useEffect(() => {
+    map.setView(center, map.getZoom());
+  }, [center, map]);
+  return null;
+};
+
 interface AlertTrackInfo {
   status: string;
   latitude: number | null;
   longitude: number | null;
+  accuracy: number | null;
+  locationStatus?: string;
+  ownerName?: string;
   updatedAt?: any;
   createdAt?: any;
+  expiresAt?: any;
+  resolvedAt?: any;
+  resolutionReason?: string;
 }
+
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 const TrackPage: React.FC = () => {
   const { alertId } = useParams<{ alertId: string }>();
   const [alert, setAlert] = useState<AlertTrackInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Update "now" every 5 seconds for freshness display
+  useEffect(() => {
+    timerRef.current = setInterval(() => setNow(Date.now()), 5000);
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!alertId) {
@@ -33,12 +60,15 @@ const TrackPage: React.FC = () => {
       return;
     }
 
-    // If Firebase is not configured, show simulated demo track
+    // If Firebase is not configured, show simulated demo track (no fabricated GPS!)
     if (!isFirebaseConfigured()) {
       setAlert({
         status: 'active',
-        latitude: 12.9716,
-        longitude: 77.5946,
+        latitude: null,
+        longitude: null,
+        accuracy: null,
+        locationStatus: 'unavailable',
+        ownerName: 'Demo User',
         updatedAt: new Date()
       });
       setLoading(false);
@@ -56,12 +86,33 @@ const TrackPage: React.FC = () => {
             return;
           }
           const data = snap.data();
+
+          // TTL check: if alert has expired, show expiration message
+          const expiresAtMs = data.expiresAt?.toMillis?.() || data.expiresAt;
+          if (expiresAtMs && Date.now() > expiresAtMs) {
+            setError('This tracking link has expired. Location sharing has ended for privacy.');
+            return;
+          }
+
+          // Fallback TTL: if no expiresAt, check if createdAt is > 24h ago
+          const createdAtMs = data.createdAt?.toMillis?.() || data.createdAt;
+          if (!expiresAtMs && createdAtMs && Date.now() - createdAtMs > TWENTY_FOUR_HOURS_MS) {
+            setError('This tracking link has expired (24-hour limit). Location sharing has ended.');
+            return;
+          }
+
           setAlert({
             status: data.status || 'active',
-            latitude: data.latitude ?? null,
-            longitude: data.longitude ?? null,
+            latitude: typeof data.latitude === 'number' ? data.latitude : null,
+            longitude: typeof data.longitude === 'number' ? data.longitude : null,
+            accuracy: typeof data.accuracy === 'number' ? data.accuracy : null,
+            locationStatus: data.locationStatus || 'unavailable',
+            ownerName: data.ownerName || undefined,
             updatedAt: data.updatedAt?.toDate?.() || data.updatedAt,
-            createdAt: data.createdAt?.toDate?.() || data.createdAt
+            createdAt: data.createdAt?.toDate?.() || data.createdAt,
+            expiresAt: data.expiresAt?.toDate?.() || data.expiresAt,
+            resolvedAt: data.resolvedAt?.toDate?.() || data.resolvedAt,
+            resolutionReason: data.resolutionReason
           });
         },
         (err) => {
@@ -79,9 +130,25 @@ const TrackPage: React.FC = () => {
   }, [alertId]);
 
   const coords =
-    alert?.latitude !== null && alert?.longitude !== null
-      ? ([alert!.latitude!, alert!.longitude!] as [number, number])
+    alert?.latitude !== null && alert?.longitude !== null && alert?.latitude !== undefined && alert?.longitude !== undefined
+      ? ([alert.latitude, alert.longitude] as [number, number])
       : null;
+
+  // Compute telemetry freshness
+  const getFreshnessText = () => {
+    if (!alert?.updatedAt) return null;
+    const updatedMs = alert.updatedAt instanceof Date ? alert.updatedAt.getTime() : Number(alert.updatedAt);
+    if (isNaN(updatedMs)) return null;
+    const diffSec = Math.floor((now - updatedMs) / 1000);
+    if (diffSec < 10) return 'Just now';
+    if (diffSec < 60) return `${diffSec}s ago`;
+    if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`;
+    return `${Math.floor(diffSec / 3600)}h ago`;
+  };
+
+  const freshnessText = getFreshnessText();
+  const updatedMs = alert?.updatedAt instanceof Date ? alert.updatedAt.getTime() : Number(alert?.updatedAt || 0);
+  const isStale = !isNaN(updatedMs) && updatedMs > 0 && (now - updatedMs > 60_000);
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -127,33 +194,72 @@ const TrackPage: React.FC = () => {
           </div>
         ) : (
           <>
+            {/* Resolved notice */}
+            {alert?.status === 'resolved' && (
+              <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-800/60 text-center">
+                <span className="text-3xl block mb-2">✅</span>
+                <h2 className="text-base font-bold text-emerald-200 mb-1">Incident Resolved</h2>
+                <p className="text-xs text-emerald-300 max-w-md mx-auto">
+                  {alert.resolutionReason || 'The person has confirmed they are safe.'}
+                  {alert.resolvedAt && (
+                    <span className="block mt-1 text-slate-400 font-mono">
+                      Resolved at {new Date(alert.resolvedAt).toLocaleTimeString()}
+                    </span>
+                  )}
+                </p>
+              </div>
+            )}
+
             {/* Status Card */}
             <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-between">
               <div>
                 <div className="flex items-center gap-2">
                   <span
                     className={`w-2.5 h-2.5 rounded-full ${
-                      alert?.status === 'active' ? 'bg-red-500 animate-ping' : 'bg-slate-500'
+                      alert?.status === 'active' ? 'bg-red-500 animate-ping' :
+                      alert?.status === 'resolved' ? 'bg-emerald-500' : 'bg-slate-500'
                     }`}
                   />
-                  <span className="text-xs font-bold uppercase tracking-wider text-red-400">
-                    {alert?.status === 'active' ? 'Distress Signal Active' : 'Alert Dismissed / Inactive'}
+                  <span className={`text-xs font-bold uppercase tracking-wider ${
+                    alert?.status === 'active' ? 'text-red-400' :
+                    alert?.status === 'resolved' ? 'text-emerald-400' : 'text-slate-400'
+                  }`}>
+                    {alert?.status === 'active' ? 'Distress Signal Active' :
+                     alert?.status === 'resolved' ? 'Incident Resolved' : 'Alert Dismissed / Inactive'}
                   </span>
                 </div>
                 <p className="text-xs text-slate-400 mt-1 font-mono">
                   Alert ID: <span className="text-slate-200">{alertId}</span>
                 </p>
+                {alert?.ownerName && (
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    From: <span className="text-slate-200 font-semibold">{alert.ownerName}</span>
+                  </p>
+                )}
               </div>
 
-              {alert?.updatedAt && (
-                <div className="text-right text-[11px] text-slate-400">
-                  <span>Last Location Update:</span>
-                  <div className="font-mono text-slate-200">
-                    {new Date(alert.updatedAt).toLocaleTimeString()}
+              {/* Freshness indicator */}
+              <div className="text-right">
+                {freshnessText && (
+                  <div className="text-[11px] text-slate-400">
+                    <span>Last Update:</span>
+                    <div className={`font-mono font-semibold ${isStale ? 'text-amber-400' : 'text-slate-200'}`}>
+                      {freshnessText}
+                    </div>
+                    {isStale && (
+                      <span className="text-[10px] text-amber-500">⚠ Signal may be stale</span>
+                    )}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
             </div>
+
+            {/* Location status notice */}
+            {alert?.locationStatus === 'denied' && (
+              <div className="p-3 rounded-xl bg-amber-950/40 border border-amber-800/60 text-xs text-amber-300 text-center">
+                ⚠️ The person&apos;s device denied GPS access. Location coordinates are unavailable.
+              </div>
+            )}
 
             {/* Coordinates info */}
             {coords ? (
@@ -182,6 +288,7 @@ const TrackPage: React.FC = () => {
                     attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                   />
+                  <MapRecenter center={coords} />
                   <Marker position={coords}>
                     <Popup>
                       <strong>Active SOS Location</strong>
@@ -189,23 +296,31 @@ const TrackPage: React.FC = () => {
                       Latitude: {coords[0]}
                       <br />
                       Longitude: {coords[1]}
+                      {alert?.accuracy && <><br />Accuracy: ±{Math.round(alert.accuracy)}m</>}
                     </Popup>
                   </Marker>
                   <Circle
                     center={coords}
-                    radius={35}
+                    radius={alert?.accuracy || 35}
                     pathOptions={{ color: '#ef4444', fillColor: '#dc2626', fillOpacity: 0.25 }}
                   />
                 </MapContainer>
               ) : (
-                <div className="w-full h-full flex items-center justify-center bg-slate-900 text-xs text-slate-500">
-                  Coordinates pending broadcast from device…
+                <div className="w-full h-full flex flex-col items-center justify-center bg-slate-900 text-xs text-slate-500 gap-2">
+                  <span className="text-2xl">📡</span>
+                  <p>
+                    {alert?.locationStatus === 'denied'
+                      ? 'GPS access was denied on the sender\'s device.'
+                      : 'Waiting for GPS coordinates from the device…'}
+                  </p>
                 </div>
               )}
             </div>
 
             <div className="text-center text-[11px] text-slate-500 pt-2">
-              This page automatically updates every few seconds as the device sends new GPS telemetry.
+              {alert?.status === 'active'
+                ? 'This page automatically updates every few seconds as the device sends new GPS telemetry.'
+                : 'Location updates have stopped — the incident is no longer active.'}
             </div>
           </>
         )}

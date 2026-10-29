@@ -6,45 +6,58 @@ A modern, responsive personal safety and emergency SOS web application designed 
 
 ## 🌟 Key Features
 
-- **One-Tap Emergency SOS**: Instant trigger mechanism for sending distress signals with accurate GPS coordinates.
-- **Real-Time Geolocation & Interactive Map**: Built-in Leaflet map displaying user location and proximity tracking.
-- **Emergency Contacts Management**: Store, update, and prioritize primary and secondary emergency contacts with international phone number validation.
-- **Firebase Authentication & Cloud Storage**: Secure phone OTP authentication with reCAPTCHA, Google Sign-In, and Firestore database integration.
-- **Multilingual Support**: Internationalization (i18n) for regional language accessibility.
-- **Progressive Web App (PWA) Ready**: Offline-capable structure and installable experience.
+- **One-Tap Emergency SOS**: Press-and-hold trigger with idempotency protection — no duplicate incidents on repeated taps.
+- **Real-Time Geolocation & Interactive Map**: Leaflet map with live GPS tracking, accuracy circles, and coordinate validation. Never fabricates GPS coordinates — handles permission denial gracefully.
+- **Emergency Contacts Management**: Add, edit, prioritize, and delete trusted contacts with E.164 phone normalization, duplicate blocking, and SMS consent verification via Twilio webhook.
+- **Multi-Provider Authentication**: Firebase Phone OTP, passwordless Email OTP (Resend), Google OAuth (Supabase), and demo mode.
+- **Live Distress Tracking Portal**: Shareable `/track/:alertId` links with real-time Firestore snapshots, telemetry freshness indicators, 24-hour TTL expiration, and resolved state display.
+- **End-to-End Incident Lifecycle**: `preparing` → `sending` → `sent` → `failed` → `resolved` with honest delivery status reporting (never fabricates notification success).
+- **Multilingual Support**: English, Hindi, Kannada via i18next.
+- **Progressive Web App (PWA) Ready**: Offline-capable and installable.
 
 ---
 
 ## 🛠️ Tech Stack
 
-- **Frontend**: React 18, TypeScript, Vite
-- **Styling**: Tailwind CSS, PostCSS, Autoprefixer
-- **Backend / BaaS**: Firebase (Auth, Firestore, Cloud Functions)
-- **Mapping**: Leaflet, React-Leaflet
-- **Internationalization**: i18next, react-i18next
-- **Validation**: libphonenumber-js
+| Layer | Technology |
+| :--- | :--- |
+| **Frontend** | React 18.2, TypeScript 5.5, Vite 5.4 |
+| **Styling** | Tailwind CSS 3.4 |
+| **Routing** | React Router DOM 6.22 (v7 flags enabled) |
+| **Maps** | Leaflet 1.9 & React-Leaflet 4.2 (OpenStreetMap) |
+| **i18n** | i18next 23.8 |
+| **Auth** | Firebase Auth (Phone, Custom Token) + Supabase (Google OAuth) |
+| **Backend** | Firebase Cloud Functions v2 (Node 20, TypeScript) |
+| **Database** | Cloud Firestore |
+| **SMS** | Twilio SDK 5.3 (2-way incoming webhook) |
+| **Email** | Resend SDK 6.6 (passwordless OTP) |
+| **Validation** | libphonenumber-js (E.164 normalization) |
+| **Testing** | Vitest 4.1 + Happy-DOM (38 tests across 7 suites) |
 
 ---
 
 ## 🚀 Getting Started
 
 ### 1. Prerequisites
-- [Node.js](https://nodejs.org/) (v18 or higher)
-- npm or yarn
+- [Node.js](https://nodejs.org/) v18 or higher
+- npm
+- Firebase CLI (`npm install -g firebase-tools`)
 
 ### 2. Installation
 ```bash
 git clone https://github.com/venkateshhnbhat/Suraksha-Signal.git
 cd Suraksha-Signal
 npm install
+cd functions && npm install && cd ..
 ```
 
 ### 3. Environment Setup
-Copy the example environment file and add your Firebase credentials:
+Copy the example environment file and add your credentials:
 ```bash
 cp .env.example .env
 ```
-Fill in the variables in `.env`:
+
+**Required frontend variables** (`.env`):
 ```env
 VITE_FIREBASE_API_KEY=your_firebase_api_key
 VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
@@ -52,77 +65,82 @@ VITE_FIREBASE_PROJECT_ID=your_project_id
 VITE_FIREBASE_STORAGE_BUCKET=your_project.appspot.com
 VITE_FIREBASE_MESSAGING_SENDER_ID=your_messaging_sender_id
 VITE_FIREBASE_APP_ID=your_app_id
+
+# Supabase (Google OAuth)
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+```
+
+**Cloud Functions secrets** (set via Firebase CLI):
+```bash
+firebase functions:secrets:set RESEND_API_KEY        # Resend email OTP
+firebase functions:secrets:set TWILIO_ACCOUNT_SID    # Twilio SMS
+firebase functions:secrets:set TWILIO_AUTH_TOKEN      # Twilio SMS
+firebase functions:secrets:set TWILIO_PHONE_NUMBER   # Twilio sender number
 ```
 
 ### 4. Running Locally
 ```bash
 npm run dev
 ```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
+Open [http://localhost:5173](http://localhost:5173). Without Firebase credentials, the app runs in **Demo Mode** with simulated contacts and local persistence.
 
-### 5. Build for Production
+### 5. Running Tests
 ```bash
-npm run build
+npm test          # Run all 38 tests
+npm run test:watch  # Interactive watch mode
+```
+
+### 6. Build for Production
+```bash
+npm run build                    # Frontend → dist/
+cd functions && npm run build    # Cloud Functions → functions/lib/
+```
+
+### 7. Deploy
+```bash
+firebase deploy --only functions,firestore:rules,hosting
 ```
 
 ---
 
-## ✉️ Email OTP Authentication Setup (Resend & Cloud Functions)
+## 🔒 Security Architecture
 
-> [!NOTE]
-> **Firebase Blaze Plan Requirement**: Google Cloud Functions (2nd gen) requires the **Firebase Blaze (Pay as you go)** plan to permit outbound network calls (to Resend / SMS providers) and deploy cloud run services. The free quota covers extensive developmental usage.
-
-### 1. Create a Resend Account & Verify Domain
-1. Sign up for a free account at [Resend](https://resend.com/).
-2. Navigate to **Domains** -> **Add Domain**.
-3. Add your custom domain (e.g. `mail.yourdomain.com` or `yourdomain.com`).
-4. Configure the DNS records (DKIM, SPF, MX) at your DNS registrar as specified by Resend until verified.
-5. Create an API Key in **API Keys** with "Sending access".
-
-### 2. Configure Firebase Secrets & Cloud Function Variables
-Store your Resend API key securely in Google Cloud Secret Manager via the Firebase CLI (never commit keys to source control):
-```bash
-firebase functions:secrets:set RESEND_API_KEY
-```
-When prompted, paste your secret Resend API key (`re_...`).
-
-Set the sending address in `functions/.env` or runtime environment:
-```env
-EMAIL_FROM="Suraksha Signal <noreply@yourdomain.com>"
-```
-
-### 3. Deploying Cloud Functions and Security Rules
-Deploy your backend functions and Firestore security rules to production:
-```bash
-firebase deploy --only functions,firestore:rules
-```
+- **Firestore Rules**: Owner-only read/write on contacts; owner-only location/status updates on alerts; public read-only for live tracking; email OTP records fully server-side.
+- **Rate Limiting**: Max 3 SOS triggers per minute per user; 60s email OTP cooldown; max 3 OTP sends per 15 minutes.
+- **Input Validation**: E.164 phone normalization, coordinate range checks (-90≤lat≤90, -180≤lng≤180), SHA-256 OTP hashing with timing-safe comparison.
+- **No Fabricated Data**: GPS coordinates are never hardcoded or invented. SMS delivery status honestly reports actual provider response.
 
 ---
 
-## 🧪 Local Emulators & Automated Testing
+## 📋 Incident Lifecycle
 
-Suraksha Signal includes full local emulator configurations for Firebase Auth, Firestore, and Cloud Functions in `firebase.json`.
+```
+preparing → sending → sent → resolved
+                    ↘ failed → (retry) → sending
+                    ↘ partial → resolved
+```
 
-### 1. Running Firebase Emulators Locally
-Make sure you have Java installed (required for the Firestore emulator), then run:
-```bash
-firebase emulators:start
-```
-This boots:
-- **Auth Emulator**: `http://localhost:9099`
-- **Firestore Emulator**: `http://localhost:8080`
-- **Functions Emulator**: `http://localhost:5001`
-- **Emulator UI Suite**: `http://localhost:4000`
+- **preparing**: Alert document persisted in Firestore before any notifications
+- **sending**: Cloud Function dispatching SMS to confirmed contacts
+- **sent**: All SMS accepted by provider (does not guarantee delivery)
+- **partial**: Some SMS sent, some failed
+- **failed**: All SMS failed or no confirmed contacts
+- **resolved**: User confirmed they are safe; tracking stops; link expires
 
-### 2. Running Automated Tests
-Run unit and integration test suites (including 6-digit OTP verification, rate limiting, timing-safe hashing, and AuthPage frontend flows):
-```bash
-npm test
-```
-To run tests in interactive watch mode:
-```bash
-npm run test:watch
-```
+---
+
+## 🧪 Test Coverage (38 tests, 7 suites)
+
+| Suite | Tests | Coverage |
+| :--- | :--- | :--- |
+| `sosWorkflow.test.ts` | 15 | Idempotency, auth, GPS denial, provider failure, ownership, resolution |
+| `emailOtpFunctions.test.ts` | 5 | Rate limiting, SHA-256 hashing, custom token issuance |
+| `ContactForm.test.tsx` | 5 | E.164 validation, required fields, form submission |
+| `SOSButton.test.tsx` | 4 | Press-and-hold interaction, activation |
+| `i18n.test.ts` | 4 | Language switching, translation keys |
+| `ContactItem.test.tsx` | 3 | Verified/pending badges, contact display |
+| `AuthPage.test.tsx` | 2 | Email input, demo mode |
 
 ---
 

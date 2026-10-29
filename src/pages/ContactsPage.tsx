@@ -20,6 +20,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
   const navigate = useNavigate();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
+  const [contactToDelete, setContactToDelete] = useState<Contact | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
@@ -71,10 +72,22 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
       return;
     }
 
+    // Duplicate phone check
+    const isDuplicate = contacts.some(
+      (c) => c.phone.replace(/\s+/g, '') === contact.phone.replace(/\s+/g, '')
+    );
+    if (isDuplicate) {
+      setError('An emergency contact with this phone number already exists.');
+      return;
+    }
+
+    const priority = contacts.length + 1;
+
     if (isDemo) {
       const newContact: Contact = {
         id: 'contact_' + Date.now(),
         ...contact,
+        priority,
         confirmed: true,
         createdAt: new Date().toISOString()
       };
@@ -87,10 +100,12 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
     }
 
     if (!auth.currentUser) return;
+    
     try {
       const contactsRef = collection(db, 'users', auth.currentUser.uid, 'contacts');
       const docRef = await addDoc(contactsRef, {
         ...contact,
+        priority,
         confirmed: false,
         createdAt: new Date()
       });
@@ -109,6 +124,16 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
 
   const handleUpdate = async (contact: Contact) => {
     setError(null);
+
+    // Duplicate phone check on other contacts
+    const isDuplicate = contacts.some(
+      (c) => c.id !== contact.id && c.phone.replace(/\s+/g, '') === contact.phone.replace(/\s+/g, '')
+    );
+    if (isDuplicate) {
+      setError('Another emergency contact already uses this phone number.');
+      return;
+    }
+
     if (isDemo) {
       const updated = contacts.map((c) => (c.id === contact.id ? contact : c));
       setContacts(updated);
@@ -135,8 +160,12 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const confirmDelete = async () => {
+    if (!contactToDelete) return;
+    const id = contactToDelete.id;
+    setContactToDelete(null);
     setError(null);
+
     if (isDemo) {
       const updated = contacts.filter((c) => c.id !== id);
       setContacts(updated);
@@ -225,7 +254,7 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
                   key={contact.id}
                   contact={contact}
                   onEdit={() => setEditingContact(contact)}
-                  onDelete={() => handleDelete(contact.id)}
+                  onDelete={() => setContactToDelete(contact)}
                 />
               ))}
             </ul>
@@ -252,6 +281,38 @@ const ContactsPage: React.FC<Props> = ({ user }) => {
                 onCancel={() => setEditingContact(null)}
                 submitLabel={t('form.saveBtn')}
               />
+            </div>
+          </div>
+        )}
+
+        {/* Delete Confirmation Modal */}
+        {contactToDelete && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="w-full max-w-sm bg-slate-900 border border-red-500/50 rounded-2xl p-6 shadow-2xl text-center">
+              <div className="w-14 h-14 rounded-2xl bg-red-500/20 text-red-400 flex items-center justify-center mx-auto mb-4 text-2xl">
+                ⚠️
+              </div>
+              <h3 className="text-lg font-bold text-white mb-2">Remove Emergency Contact?</h3>
+              <p className="text-xs text-slate-300 mb-1">
+                Are you sure you want to remove <span className="font-semibold text-white">{contactToDelete.name}</span> ({contactToDelete.phone}) from your emergency contacts?
+              </p>
+              <p className="text-xs text-red-300 mb-5">
+                They will no longer receive SOS alerts during emergencies.
+              </p>
+              <div className="flex gap-2.5">
+                <button
+                  onClick={() => setContactToDelete(null)}
+                  className="flex-1 py-2.5 px-4 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-xl text-xs border border-slate-700 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmDelete}
+                  className="flex-1 py-2.5 px-4 bg-red-600 hover:bg-red-500 text-white font-bold rounded-xl text-xs transition shadow-md shadow-red-600/20"
+                >
+                  Yes, Remove Contact
+                </button>
+              </div>
             </div>
           </div>
         )}

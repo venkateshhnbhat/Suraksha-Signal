@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { isValidPhoneNumber } from 'libphonenumber-js';
+import { parsePhoneNumber, isValidPhoneNumber } from 'libphonenumber-js';
 import { useTranslation } from 'react-i18next';
 
 type ContactInput = {
@@ -31,15 +31,28 @@ const ContactForm: React.FC<Props> = ({ initial, onSubmit, onCancel, disabled, s
       return;
     }
 
-    // Relaxed validation: accepts E.164 or common formats, fallback to length check for emergency numbers like 112
     const cleanPhone = phone.trim();
     const isSpecialNumber = cleanPhone === '112' || cleanPhone === '911' || cleanPhone === '999';
-    if (!isSpecialNumber && !isValidPhoneNumber(cleanPhone)) {
-      setError(t('form.invalidPhone'));
-      return;
+    let normalizedPhone = cleanPhone;
+
+    if (!isSpecialNumber) {
+      try {
+        const parsed = parsePhoneNumber(cleanPhone, 'IN');
+        if (!parsed || !parsed.isValid()) {
+          setError(t('form.invalidPhone'));
+          return;
+        }
+        normalizedPhone = parsed.number; // Canonical E.164 (e.g. +919876543210)
+      } catch {
+        // Fallback check
+        if (!isValidPhoneNumber(cleanPhone, 'IN')) {
+          setError(t('form.invalidPhone'));
+          return;
+        }
+      }
     }
 
-    await onSubmit({ name: name.trim(), phone: cleanPhone, relationship: relationship.trim() });
+    await onSubmit({ name: name.trim(), phone: normalizedPhone, relationship: relationship.trim() });
     if (!initial) {
       setName('');
       setPhone('');

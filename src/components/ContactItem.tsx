@@ -16,6 +16,11 @@ const ContactItem: React.FC<Props> = ({ contact, onEdit, onDelete }) => {
       <div className="flex flex-col">
         <div className="flex items-center gap-2">
           <span className="font-semibold text-slate-100 text-sm">{contact.name}</span>
+          {contact.priority === 1 && (
+            <span className="text-[10px] bg-teal-500/20 text-teal-300 border border-teal-500/40 px-1.5 py-0.5 rounded font-medium">
+              Primary
+            </span>
+          )}
           {contact.confirmed ? (
             <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-medium">
               {t('contacts.verified')}

@@ -18,10 +18,13 @@ service cloud.firestore {
       // Reading alerts: owner can read full alert, or public can read for live tracking (/track/:alertId)
       allow read: if true;
 
-      // Updating alerts: owner can update only location and status fields (no delivery tamper)
+      // Updating alerts: owner can update only location, location telemetry, resolution, and status fields (no delivery results tampering)
       allow update: if request.auth != null 
         && resource.data.ownerUid == request.auth.uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['latitude', 'longitude', 'updatedAt', 'status']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+             'latitude', 'longitude', 'accuracy', 'locationStatus', 'locationHistory', 
+             'updatedAt', 'status', 'resolvedAt', 'resolvedBy', 'resolutionReason'
+           ]);
 
       // No client deletes allowed
       allow delete: if false;

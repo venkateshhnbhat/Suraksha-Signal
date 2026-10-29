@@ -1,12 +1,12 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { collection, doc, query, orderBy, getDocs, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
+import { collection, doc, query, orderBy, getDocs, setDoc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { db, auth, functions, isFirebaseConfigured } from '@/firebase';
 import { httpsCallable } from 'firebase/functions';
 import SOSButton from '@/components/SOSButton';
 import LanguageSwitcher from '@/components/LanguageSwitcher';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import type { AppUser, Contact, ActiveAlert } from '@/types';
+import type { AppUser, Contact, ActiveAlert, SOSStatus, LocationStatus } from '@/types';
 import { DEFAULT_DEMO_CONTACTS } from '@/constants';
 import { MapContainer, TileLayer, Marker, Popup, Circle } from 'react-leaflet';
 import L from 'leaflet';
@@ -24,22 +24,71 @@ interface Props {
   onLogout: () => void;
 }
 
+// Persist active alert ID in sessionStorage so page refresh can restore it
+const ACTIVE_ALERT_KEY = 'suraksha_active_alert';
+
 const HomePage: React.FC<Props> = ({ user, onLogout }) => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [coords, setCoords] = useState<{ lat: number; lng: number; accuracy: number } | null>(null);
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>('unavailable');
   const [geoError, setGeoError] = useState<string | null>(null);
   const [activeAlert, setActiveAlert] = useState<ActiveAlert | null>(null);
   const [showNoContactsModal, setShowNoContactsModal] = useState(false);
   const [sirenPlaying, setSirenPlaying] = useState(false);
+  const [sosInFlight, setSosInFlight] = useState(false);
 
   // Siren AudioContext and Oscillators refs
   const audioContextRef = useRef<AudioContext | null>(null);
   const carrierOscRef = useRef<OscillatorNode | null>(null);
   const lfoOscRef = useRef<OscillatorNode | null>(null);
 
-  // Load contacts (Firestore for real users; LocalStorage for demo)
+  // Persist/restore active alert across page refreshes
+  const persistAlert = useCallback((alert: ActiveAlert | null) => {
+    setActiveAlert(alert);
+    if (alert && !alert.isDemo) {
+      sessionStorage.setItem(ACTIVE_ALERT_KEY, JSON.stringify(alert));
+    } else {
+      sessionStorage.removeItem(ACTIVE_ALERT_KEY);
+    }
+  }, []);
+
+  // Restore active alert from sessionStorage on mount
+  useEffect(() => {
+    const saved = sessionStorage.getItem(ACTIVE_ALERT_KEY);
+    if (saved && !user.isDemo && isFirebaseConfigured() && auth.currentUser) {
+      try {
+        const parsed = JSON.parse(saved) as ActiveAlert;
+        if (parsed.id && (parsed.status === 'sending' || parsed.status === 'sent' || parsed.status === 'preparing')) {
+          const alertRef = doc(db, 'alerts', parsed.id);
+          getDoc(alertRef).then((snap) => {
+            if (snap.exists()) {
+              const data = snap.data();
+              if (data.status === 'active') {
+                setActiveAlert({
+                  ...parsed,
+                  status: data.deliveryStatus === 'sent' || data.deliveryStatus === 'partial' ? 'sent' : parsed.status,
+                  sentCount: data.summary?.sent ?? parsed.sentCount,
+                  totalCount: data.summary?.total ?? parsed.totalCount
+                });
+              } else if (data.status === 'resolved' || data.status === 'dismissed') {
+                sessionStorage.removeItem(ACTIVE_ALERT_KEY);
+              }
+            } else {
+              sessionStorage.removeItem(ACTIVE_ALERT_KEY);
+            }
+          }).catch(() => {
+            setActiveAlert(parsed);
+          });
+        }
+      } catch {
+        sessionStorage.removeItem(ACTIVE_ALERT_KEY);
+      }
+    }
+  }, [user]);
+
+  // Load contacts
   useEffect(() => {
     const loadContacts = async () => {
       if (user.isDemo || !isFirebaseConfigured() || !auth.currentUser) {
@@ -66,7 +115,6 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
             const data = docSnap.data() as Omit<Contact, 'id'>;
             list.push({ id: docSnap.id, ...data });
           });
-          // Real users get their actual contacts, NO fallback to demo contacts!
           setContacts(list);
         } catch (err) {
           console.warn('Firestore fetch failed:', err);
@@ -78,27 +126,38 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
     loadContacts();
   }, [user]);
 
-  // Geolocation tracking
+  // Geolocation tracking — NEVER fabricate coordinates
   useEffect(() => {
     if (!('geolocation' in navigator)) {
       setGeoError('Geolocation not supported by this browser');
-      setCoords({ lat: 12.9716, lng: 77.5946, accuracy: 25 });
+      setLocationStatus('unavailable');
       return;
     }
 
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
-        setCoords({
+        const newCoords = {
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           accuracy: pos.coords.accuracy
-        });
-        setGeoError(null);
+        };
+        if (newCoords.lat >= -90 && newCoords.lat <= 90 &&
+            newCoords.lng >= -180 && newCoords.lng <= 180) {
+          setCoords(newCoords);
+          setLocationStatus('acquired');
+          setGeoError(null);
+        }
       },
       (err) => {
         console.warn('Geolocation watch error:', err.message);
         setGeoError(err.message);
-        setCoords((prev) => prev || { lat: 12.9716, lng: 77.5946, accuracy: 50 });
+        if (err.code === 1) {
+          setLocationStatus('denied');
+        } else if (err.code === 3) {
+          setLocationStatus('stale');
+        } else {
+          setLocationStatus('unavailable');
+        }
       },
       { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 }
     );
@@ -108,25 +167,30 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
 
   // Live Location stream: Update alert document in Firestore every ~10s while alert is active
   useEffect(() => {
-    if (!activeAlert || activeAlert.status === 'failed' || activeAlert.isDemo || !coords) {
+    if (!activeAlert || activeAlert.status === 'failed' || activeAlert.status === 'resolved' || activeAlert.isDemo || !coords) {
       return;
     }
 
-    const intervalId = setInterval(async () => {
+    const pushLocation = async () => {
       try {
         const alertDocRef = doc(db, 'alerts', activeAlert.id);
         await updateDoc(alertDocRef, {
           latitude: coords.lat,
           longitude: coords.lng,
+          accuracy: coords.accuracy,
+          locationStatus: locationStatus,
           updatedAt: serverTimestamp()
         });
       } catch (e) {
         console.warn('Live location update warning:', e);
       }
-    }, 10000);
+    };
+
+    pushLocation();
+    const intervalId = setInterval(pushLocation, 10000);
 
     return () => clearInterval(intervalId);
-  }, [activeAlert, coords]);
+  }, [activeAlert, coords, locationStatus]);
 
   // Cleanup siren audio nodes and context
   const stopSiren = () => {
@@ -161,23 +225,19 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
         const ctx = new AudioContextClass();
         audioContextRef.current = ctx;
 
-        // Carrier oscillator (primary tone ~900Hz)
         const carrier = ctx.createOscillator();
         carrier.type = 'sawtooth';
         carrier.frequency.setValueAtTime(900, ctx.currentTime);
 
-        // LFO oscillator (~1.5Hz pitch modulator for classic police/emergency wail)
         const lfo = ctx.createOscillator();
         lfo.type = 'sine';
         lfo.frequency.setValueAtTime(1.5, ctx.currentTime);
 
-        // LFO depth
         const lfoGain = ctx.createGain();
         lfoGain.gain.setValueAtTime(450, ctx.currentTime);
         lfo.connect(lfoGain);
         lfoGain.connect(carrier.frequency);
 
-        // Master volume
         const masterGain = ctx.createGain();
         masterGain.gain.setValueAtTime(0.2, ctx.currentTime);
         carrier.connect(masterGain);
@@ -195,7 +255,6 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
     }
   };
 
-  // Cleanup audio on unmount
   useEffect(() => {
     return () => {
       stopSiren();
@@ -204,7 +263,11 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
 
   // SOS activation handler
   const handleSOS = async () => {
-    // Check confirmed contacts for real users
+    if (sosInFlight) return;
+    if (activeAlert && activeAlert.status !== 'failed' && activeAlert.status !== 'resolved') {
+      return;
+    }
+
     const confirmedList = contacts.filter((c) => c.confirmed);
 
     if (!user.isDemo && confirmedList.length === 0) {
@@ -215,18 +278,20 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
     const alertId = 'ALERT_' + Date.now().toString(36).toUpperCase();
     const timeStr = new Date().toLocaleTimeString();
 
-    // Set initial sending state
-    setActiveAlert({
+    const newAlert: ActiveAlert = {
       id: alertId,
       time: timeStr,
-      status: 'sending',
+      status: 'preparing',
+      locationStatus: locationStatus,
       isDemo: user.isDemo
-    });
+    };
+    persistAlert(newAlert);
+    setSosInFlight(true);
 
     if (user.isDemo || !isFirebaseConfigured() || !auth.currentUser) {
-      // Simulate realistic demo send
+      persistAlert({ ...newAlert, status: 'sending' });
       setTimeout(() => {
-        setActiveAlert({
+        persistAlert({
           id: alertId,
           time: timeStr,
           status: 'sent',
@@ -234,67 +299,108 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
           totalCount: contacts.length,
           isDemo: true
         });
+        setSosInFlight(false);
       }, 700);
       return;
     }
 
     try {
-      // 1. Create alert document in Firestore with owner and initial coordinates
+      persistAlert({ ...newAlert, status: 'sending' });
       const alertDocRef = doc(db, 'alerts', alertId);
       await setDoc(alertDocRef, {
         ownerUid: auth.currentUser.uid,
+        ownerName: user.displayName || 'Unknown',
         status: 'active',
+        deliveryStatus: 'preparing',
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-        latitude: coords?.lat || null,
-        longitude: coords?.lng || null
+        latitude: coords?.lat ?? null,
+        longitude: coords?.lng ?? null,
+        accuracy: coords?.accuracy ?? null,
+        locationStatus: locationStatus
       });
 
-      // 2. Invoke triggerSOS Cloud Function
-      const triggerSOSFn = httpsCallable<{ sessionId: string }, { sent: number; failed: number; total: number }>(
-        functions,
-        'triggerSOS'
-      );
+      const triggerSOSFn = httpsCallable<
+        { sessionId: string },
+        { sent: number; failed: number; total: number; deliveryStatus?: string; idempotent?: boolean }
+      >(functions, 'triggerSOS');
       const res = await triggerSOSFn({ sessionId: alertId });
 
-      const { sent, total } = res.data;
-      setActiveAlert({
+      const { sent, total, deliveryStatus: ds } = res.data;
+      const finalStatus: SOSStatus = ds === 'failed' ? 'failed' : 'sent';
+      persistAlert({
         id: alertId,
         time: timeStr,
-        status: 'sent',
+        status: finalStatus,
         sentCount: sent,
         totalCount: total,
-        isDemo: false
+        isDemo: false,
+        error: ds === 'failed' ? 'No confirmed contacts could be notified.' : undefined
       });
     } catch (err: any) {
       console.error('Backend SOS broadcast failed:', err);
-      setActiveAlert({
+      persistAlert({
         id: alertId,
         time: timeStr,
         status: 'failed',
         error: err.message || 'Network error while broadcasting distress signal.',
         isDemo: false
       });
+    } finally {
+      setSosInFlight(false);
     }
   };
 
-  const handleDismissAlert = async () => {
-    if (activeAlert && !activeAlert.isDemo && isFirebaseConfigured() && auth.currentUser) {
+  const handleResolveSOS = async (reason?: string) => {
+    if (!activeAlert) return;
+
+    if (activeAlert.isDemo || !isFirebaseConfigured() || !auth.currentUser) {
+      persistAlert(null);
+      return;
+    }
+
+    try {
+      const resolveSOSFn = httpsCallable<
+        { sessionId: string; reason?: string },
+        { success: boolean }
+      >(functions, 'resolveSOS');
+      await resolveSOSFn({ sessionId: activeAlert.id, reason: reason || 'Resolved by user' });
+    } catch {
       try {
         const alertDocRef = doc(db, 'alerts', activeAlert.id);
         await updateDoc(alertDocRef, {
-          status: 'dismissed',
+          status: 'resolved',
           updatedAt: serverTimestamp()
         });
-      } catch (e) {
-        console.warn('Error dismissing alert in firestore:', e);
+      } catch (e2) {
+        console.warn('Error resolving alert in firestore:', e2);
       }
     }
-    setActiveAlert(null);
+
+    persistAlert(null);
+    stopSiren();
   };
 
-  const centerPos: [number, number] = coords ? [coords.lat, coords.lng] : [12.9716, 77.5946];
+  const handleDismissAlert = async () => {
+    await handleResolveSOS('Dismissed by user');
+  };
+
+  const centerPos: [number, number] | null = coords ? [coords.lat, coords.lng] : null;
   const confirmedCount = contacts.filter((c) => c.confirmed).length;
+
+  const getLocationStatusText = () => {
+    switch (locationStatus) {
+      case 'acquired':
+        return coords ? `±${Math.round(coords.accuracy)}m accuracy` : 'Acquiring GPS';
+      case 'denied':
+        return '⚠️ Location permission denied';
+      case 'stale':
+        return '⚠️ Location may be stale';
+      case 'unavailable':
+      default:
+        return 'Acquiring GPS…';
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -339,29 +445,41 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
 
       {/* Main Container */}
       <main className="flex-1 max-w-4xl w-full mx-auto p-4 space-y-6">
-        {/* Active Emergency Alert Banner with Real States */}
+        {/* Active Emergency Alert Banner */}
         {activeAlert && (
           <div
             className={`p-4 rounded-2xl border shadow-lg transition-all ${
-              activeAlert.status === 'sending'
+              activeAlert.status === 'preparing' || activeAlert.status === 'sending'
                 ? 'bg-amber-950/70 border-amber-500/80 shadow-amber-900/20'
                 : activeAlert.status === 'failed'
                 ? 'bg-rose-950 border-rose-600 shadow-rose-950/50'
+                : activeAlert.status === 'resolved'
+                ? 'bg-slate-900 border-slate-700'
                 : 'bg-gradient-to-r from-red-950 to-rose-950 border-red-600/80 shadow-red-900/30'
             }`}
           >
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-start gap-3">
                 <span className="text-3xl mt-0.5">
-                  {activeAlert.status === 'sending' ? '⏳' : activeAlert.status === 'failed' ? '❌' : '🚨'}
+                  {activeAlert.status === 'preparing' || activeAlert.status === 'sending'
+                    ? '⏳'
+                    : activeAlert.status === 'failed'
+                    ? '❌'
+                    : activeAlert.status === 'resolved'
+                    ? '✅'
+                    : '🚨'}
                 </span>
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="font-bold text-white text-base">
-                      {activeAlert.status === 'sending'
+                      {activeAlert.status === 'preparing'
+                        ? 'PREPARING EMERGENCY INCIDENT…'
+                        : activeAlert.status === 'sending'
                         ? 'BROADCASTING EMERGENCY DISTRESS SIGNAL…'
                         : activeAlert.status === 'failed'
                         ? 'SOS DISPATCH FAILED'
+                        : activeAlert.status === 'resolved'
+                        ? 'INCIDENT RESOLVED'
                         : 'DISTRESS SIGNAL BROADCAST ACTIVE'}
                     </h3>
                     {activeAlert.isDemo && (
@@ -375,7 +493,13 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
                     Triggered at {activeAlert.time} • Alert ID: {activeAlert.id}
                   </p>
 
-                  {activeAlert.status === 'sending' && (
+                  {activeAlert.locationStatus === 'denied' && (
+                    <p className="text-xs text-amber-300 mt-1">
+                      ⚠️ Location permission was denied — alert sent without GPS coordinates.
+                    </p>
+                  )}
+
+                  {(activeAlert.status === 'preparing' || activeAlert.status === 'sending') && (
                     <p className="text-xs text-amber-300 mt-1">
                       Dispatching encrypted location and panic signals to your emergency contacts…
                     </p>
@@ -395,7 +519,8 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
                       <div className="flex items-center gap-2 pt-1">
                         <button
                           onClick={handleSOS}
-                          className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-sm"
+                          disabled={sosInFlight}
+                          className="px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition shadow-sm disabled:opacity-50"
                         >
                           🔄 Retry SOS Dispatch
                         </button>
@@ -406,6 +531,17 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
                           <span>📞 Call 112 Immediately</span>
                         </a>
                       </div>
+                    </div>
+                  )}
+
+                  {activeAlert.status === 'sent' && !activeAlert.isDemo && (
+                    <div className="mt-2">
+                      <button
+                        onClick={() => handleResolveSOS('I am safe now')}
+                        className="px-3 py-1.5 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold transition"
+                      >
+                        ✅ I&apos;m Safe — Resolve Incident
+                      </button>
                     </div>
                   )}
                 </div>
@@ -428,6 +564,11 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
             <p className="text-sm text-slate-400 mt-1">
               Press and hold to send instant distress alert with your location
             </p>
+            {locationStatus === 'denied' && (
+              <p className="text-xs text-amber-400 mt-1">
+                ⚠️ GPS permission denied — SOS will still work but without your location
+              </p>
+            )}
           </div>
 
           <div className="py-4">
@@ -464,12 +605,18 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
               <h3 className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
                 <span>📍 Live GPS Tracking</span>
               </h3>
-              <span className="text-[11px] px-2 py-0.5 rounded-full bg-teal-500/10 text-teal-300 border border-teal-500/20 font-medium">
-                {coords ? `±${Math.round(coords.accuracy)}m accuracy` : 'Acquiring GPS'}
+              <span className={`text-[11px] px-2 py-0.5 rounded-full border font-medium ${
+                locationStatus === 'acquired'
+                  ? 'bg-teal-500/10 text-teal-300 border-teal-500/20'
+                  : locationStatus === 'denied'
+                  ? 'bg-red-500/10 text-red-300 border-red-500/20'
+                  : 'bg-amber-500/10 text-amber-300 border-amber-500/20'
+              }`}>
+                {getLocationStatusText()}
               </span>
             </div>
 
-            {coords ? (
+            {coords && centerPos ? (
               <div className="space-y-3 flex-1 flex flex-col">
                 <div className="flex gap-2 text-xs font-mono bg-slate-950 p-2.5 rounded-xl border border-slate-800">
                   <div className="flex-1">
@@ -507,9 +654,21 @@ const HomePage: React.FC<Props> = ({ user, onLogout }) => {
               </div>
             ) : (
               <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-slate-500">
-                <div className="w-8 h-8 border-2 border-teal-500 border-t-transparent rounded-full animate-spin mb-2" />
-                <p className="text-xs">Connecting to device GPS sensor…</p>
-                {geoError && <p className="text-[11px] text-amber-400 mt-1">{geoError}</p>}
+                {locationStatus === 'denied' ? (
+                  <>
+                    <div className="w-12 h-12 rounded-2xl bg-red-500/10 text-red-400 flex items-center justify-center text-2xl mb-2">🚫</div>
+                    <p className="text-xs font-semibold text-red-300">Location Permission Denied</p>
+                    <p className="text-[11px] text-slate-400 mt-1">
+                      Enable location access in your browser settings to share GPS coordinates with emergency contacts.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="w-8 h-8 border-2 border-teal-500 border-t-transparent rounded-full animate-spin mb-2" />
+                    <p className="text-xs">Connecting to device GPS sensor…</p>
+                    {geoError && <p className="text-[11px] text-amber-400 mt-1">{geoError}</p>}
+                  </>
+                )}
               </div>
             )}
           </div>
