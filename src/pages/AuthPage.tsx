@@ -112,7 +112,20 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
         throw new Error('Authentication service is not configured.');
       } catch (err: any) {
         console.error('sendEmailOtp error:', err);
-        setError(err.message || 'Failed to send verification code. Please try again.');
+        let msg = 'Failed to send verification code. Please try again.';
+        if (typeof err?.message === 'string' && err.message.trim() && err.message !== '{}') {
+          msg = err.message;
+        } else if (typeof err?.error_description === 'string') {
+          msg = err.error_description;
+        } else if (typeof err?.msg === 'string') {
+          msg = err.msg;
+        } else if (err?.code) {
+          msg = `Authentication error: ${err.code}`;
+        }
+        if (msg.toLowerCase().includes('confirmation mail') || msg === '{}') {
+          msg = 'SMTP delivery failed. Please check your Supabase SMTP settings (Port 587/465, App Password) or use Google Sign-In.';
+        }
+        setError(msg);
       } finally {
         setLoading(false);
       }
