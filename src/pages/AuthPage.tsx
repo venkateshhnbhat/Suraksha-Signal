@@ -136,7 +136,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
         if (/^\d{10}$/.test(formattedPhone)) {
           formattedPhone = `+91${formattedPhone}`;
         } else {
-          setError('Please include country code for phone number (e.g. +91 9480178942).');
+          setError('Please include country code for phone number (e.g. +91 98765 43210).');
           return;
         }
       }
@@ -156,7 +156,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
           setCodeSent(true);
           setCountdown(60);
         } else if (e.code?.includes('invalid-phone-number')) {
-          setError('Invalid phone number format. Please enter a valid 10-digit number (e.g. +91 9480178942).');
+          setError('Invalid phone number format. Please enter a valid 10-digit number (e.g. +91 98765 43210).');
         } else {
           setSuccessMsg(`Verification requested for ${formattedPhone}.`);
           setCodeSent(true);
@@ -378,7 +378,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
               </span>
             </div>
             <p className={`text-[11px] mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-              Enter your email or 10-digit mobile number (e.g. +91 9480178942)
+              Enter your email or 10-digit mobile number (e.g. +91 98765 43210)
             </p>
           </div>
 
