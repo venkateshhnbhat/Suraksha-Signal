@@ -66,20 +66,6 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
     return () => clearInterval(timer);
   }, [countdown]);
 
-  const handleDemoSignIn = (customEmail?: string, customName?: string) => {
-    const demoUser: AppUser = {
-      uid: 'user_' + Date.now().toString(36),
-      displayName: customName || 'Suraksha User',
-      email: customEmail || 'user@surakshasignal.app',
-      phoneNumber: '+919480178942',
-      isDemo: false
-    };
-    if (onLoginDemo) {
-      onLoginDemo(demoUser);
-    }
-    navigate('/');
-  };
-
   const handleSendCode = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     setError(null);
@@ -105,37 +91,28 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
       try {
         setLoading(true);
 
-        // 1. Try Supabase Auth real OTP email
+        // 1. Send dynamic OTP email via Supabase
         if (isSupabaseConfigured) {
-          try {
-            await sendSupabaseOtp(val.toLowerCase());
-            setCodeSent(true);
-            setCountdown(60);
-            setSuccessMsg(`Sign-in link sent to ${val}! You can click "Sign in" directly in the email to log in instantly, or enter your 6-digit code below.`);
-            return;
-          } catch (supaErr: any) {
-            console.warn('Supabase signInWithOtp failed, falling back:', supaErr);
-          }
+          await sendSupabaseOtp(val.toLowerCase());
+          setCodeSent(true);
+          setCountdown(60);
+          setSuccessMsg(`Verification email sent to ${val}! Check your inbox for your dynamic code or click the sign-in link.`);
+          return;
         }
 
-        // 2. Try Firebase callable
+        // 2. Fallback to Firebase callable if configured
         if (hasFirebaseConfig) {
           await requestEmailOtp(val.toLowerCase());
           setCodeSent(true);
           setCountdown(60);
-          setSuccessMsg(`6-digit code sent to ${val}.`);
+          setSuccessMsg(`Verification code sent to ${val}.`);
           return;
         }
 
-        // 3. Fallback
-        setCodeSent(true);
-        setCountdown(60);
-        setSuccessMsg(`Verification code sent to ${val}.`);
+        throw new Error('Authentication service is not configured.');
       } catch (err: any) {
-        console.warn('sendEmailOtp error:', err);
-        setCodeSent(true);
-        setCountdown(60);
-        setSuccessMsg(`Verification code sent to ${val}.`);
+        console.error('sendEmailOtp error:', err);
+        setError(err.message || 'Failed to send verification code. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -189,16 +166,6 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
     setError(null);
     setSuccessMsg(null);
 
-    // Instant bypass code for development / demo testing
-    if (code === '123456') {
-      const isEmail = identifier.includes('@');
-      handleDemoSignIn(
-        isEmail ? identifier.trim().toLowerCase() : undefined,
-        isEmail ? identifier.split('@')[0] : `User (${identifier})`
-      );
-      return;
-    }
-
     try {
       setLoading(true);
 
@@ -210,34 +177,28 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
           navigate('/');
           return;
         }
+        throw new Error('Phone verification session expired. Please request a new code.');
       } else {
-        // Email verification via Supabase
+        // Real Dynamic Email OTP verification via Supabase
         if (isSupabaseConfigured) {
-          try {
-            await verifySupabaseOtp(identifier.trim().toLowerCase(), code);
-            navigate('/');
-            return;
-          } catch (supaErr) {
-            console.warn('Supabase verifyOtp failed:', supaErr);
-          }
+          await verifySupabaseOtp(identifier.trim().toLowerCase(), code);
+          navigate('/');
+          return;
         }
 
-        // Email verification via Firebase custom token
+        // Real Email OTP verification via Firebase custom token
         if (hasFirebaseConfig) {
           const { token } = await confirmEmailOtp(identifier.trim().toLowerCase(), code);
           await signInWithCustomToken(auth, token);
           navigate('/');
           return;
         }
-      }
 
-      handleDemoSignIn(
-        identifier.includes('@') ? identifier.trim().toLowerCase() : undefined,
-        identifier.split('@')[0]
-      );
+        throw new Error('Authentication service not configured.');
+      }
     } catch (err: any) {
       console.warn('verify error:', err);
-      setError('Invalid or expired code. Please verify the code or request a new one.');
+      setError(err.message || 'Invalid or expired code. Please check your email for the correct code.');
     } finally {
       setLoading(false);
     }
