@@ -111,7 +111,7 @@ const AuthPage: React.FC<Props> = ({ onLoginDemo }) => {
             await sendSupabaseOtp(val.toLowerCase());
             setCodeSent(true);
             setCountdown(60);
-            setSuccessMsg(`6-digit code sent to ${val}. Please check your inbox and Spam folder.`);
+            setSuccessMsg(`Sign-in link sent to ${val}! You can click "Sign in" directly in the email to log in instantly, or enter your 6-digit code below.`);
             return;
           } catch (supaErr: any) {
             console.warn('Supabase signInWithOtp failed, falling back:', supaErr);
